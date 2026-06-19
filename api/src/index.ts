@@ -3,6 +3,7 @@ import "./config/env.js";
 import express from "express";
 import { prisma } from "./db/prisma.js";
 import { connectRedis } from "./lib/redis.js";
+import { enqueueDeployment } from "./services/queue.service.js";
 
 const app = express();
 
@@ -45,6 +46,8 @@ app.post("/api/deployments", async (req, res) => {
         status: "QUEUED",
       },
     });
+
+    await enqueueDeployment(deployment.id);
 
     res.status(201).json(deployment);
   } catch (error) {
