@@ -1,5 +1,8 @@
+import "./config/env.js";
+
 import express from "express";
 import { prisma } from "./db/prisma.js";
+import { connectRedis } from "./lib/redis.js";
 
 const app = express();
 
@@ -52,6 +55,8 @@ app.post("/api/deployments", async (req, res) => {
     });
   }
 });
+
+await connectRedis();
 
 app.listen(3001, () => {
   console.log("Server is running on port 3000");
