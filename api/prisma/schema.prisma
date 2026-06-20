@@ -34,6 +34,8 @@ model Deployment {
 
   containerId  String?
 
+  hostPort      Int?
+
   deployedUrl   String?
 
   buildLogs     String?

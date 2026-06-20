@@ -5,10 +5,12 @@ import { connectRedis, redis } from "./lib/redis.js";
 import { hasDockerfile } from "./services/deployment.service.js";
 import {
   buildImage,
+  getExposedPort,
   isContainerRunning,
   runContainer,
 } from "./services/docker.service.js";
 import { cloneRepository } from "./services/git.service.js";
+import { getAvailablePort } from "./utils/port.util.js";
 
 const DEPLOYMENT_QUEUE = "deployment-queue";
 
@@ -96,8 +98,10 @@ async function startWorker() {
         },
       });
 
-      const containerId = await runContainer(imageTag);
+      const containerPort = await getExposedPort(imageTag);
+      const hostPort = await getAvailablePort();
 
+      const containerId = await runContainer(imageTag, hostPort, containerPort);
       console.log(`Started container ${containerId}`);
 
       await new Promise((resolve) => setTimeout(resolve, 2000));
@@ -128,8 +132,12 @@ async function startWorker() {
           status: "SUCCESS",
           imageTag,
           containerId,
+          hostPort,
+          deployedUrl: `http://localhost:${hostPort}`,
         },
       });
+
+      console.log(`Application available at http://localhost:${hostPort}`);
     } catch (error) {
       console.error(`Failed processing ${deploymentId}`, error);
 
