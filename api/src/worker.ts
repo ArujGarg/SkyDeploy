@@ -3,6 +3,7 @@ import "./config/env.js";
 import { prisma } from "./db/prisma.js";
 import { connectRedis, redis } from "./lib/redis.js";
 import { hasDockerfile } from "./services/deployment.service.js";
+import { buildImage } from "./services/docker.service.js";
 import { cloneRepository } from "./services/git.service.js";
 
 const DEPLOYMENT_QUEUE = "deployment-queue";
@@ -64,7 +65,7 @@ async function startWorker() {
             errorMessage: "Dockerfile not found",
           },
         });
-
+        console.log("Dockerfile not found");
         continue;
       }
 
@@ -74,6 +75,19 @@ async function startWorker() {
         },
         data: {
           status: "BUILDING",
+        },
+      });
+
+      const imageTag = await buildImage(deployment.id);
+
+      console.log(`Built image ${imageTag}`);
+
+      await prisma.deployment.update({
+        where: {
+          id: deployment.id,
+        },
+        data: {
+          imageTag,
         },
       });
 
