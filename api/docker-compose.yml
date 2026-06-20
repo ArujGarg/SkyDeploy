@@ -1,7 +1,6 @@
 services:
   postgres:
     image: postgres:17
-
     container_name: shipyard-postgres
 
     environment:
@@ -14,6 +13,13 @@ services:
 
     volumes:
       - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7
+    container_name: shipyard-redis
+
+    ports:
+      - "6379:6379"
 
 volumes:
   postgres_data:

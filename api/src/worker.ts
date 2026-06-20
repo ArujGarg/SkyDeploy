@@ -3,7 +3,11 @@ import "./config/env.js";
 import { prisma } from "./db/prisma.js";
 import { connectRedis, redis } from "./lib/redis.js";
 import { hasDockerfile } from "./services/deployment.service.js";
-import { buildImage } from "./services/docker.service.js";
+import {
+  buildImage,
+  isContainerRunning,
+  runContainer,
+} from "./services/docker.service.js";
 import { cloneRepository } from "./services/git.service.js";
 
 const DEPLOYMENT_QUEUE = "deployment-queue";
@@ -87,11 +91,45 @@ async function startWorker() {
           id: deployment.id,
         },
         data: {
+          status: "DEPLOYING",
           imageTag,
         },
       });
 
-      console.log(`Deployment ${deployment.id} ready for build`);
+      const containerId = await runContainer(imageTag);
+
+      console.log(`Started container ${containerId}`);
+
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+
+      const running = await isContainerRunning(containerId);
+
+      if (!running) {
+        await prisma.deployment.update({
+          where: {
+            id: deployment.id,
+          },
+          data: {
+            status: "FAILED",
+            errorMessage: "Container exited immediately",
+          },
+        });
+        console.log("container is not running");
+
+        continue;
+      }
+
+      console.log("container is running");
+      await prisma.deployment.update({
+        where: {
+          id: deployment.id,
+        },
+        data: {
+          status: "SUCCESS",
+          imageTag,
+          containerId,
+        },
+      });
     } catch (error) {
       console.error(`Failed processing ${deploymentId}`, error);
 

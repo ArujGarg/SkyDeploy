@@ -32,6 +32,8 @@ model Deployment {
 
   imageTag      String?
 
+  containerId  String?
+
   deployedUrl   String?
 
   buildLogs     String?

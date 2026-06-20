@@ -13,3 +13,17 @@ export async function buildImage(deploymentId: string) {
 
   return imageTag;
 }
+
+export async function runContainer(imageTag: string) {
+  const { stdout } = await execAsync(`docker run -d ${imageTag}`);
+
+  return stdout.trim();
+}
+
+export async function isContainerRunning(containerId: string) {
+  const { stdout } = await execAsync(
+    `docker inspect -f '{{.State.Running}}' ${containerId}`,
+  );
+
+  return stdout.trim() === "true";
+}

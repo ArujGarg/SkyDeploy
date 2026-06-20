@@ -5,3 +5,5 @@ node_modules
 /src/generated/prisma
 
 /workspace
+.DS_Store
+**/.DS_Store
