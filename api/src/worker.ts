@@ -2,6 +2,8 @@ import "./config/env.js";
 
 import { prisma } from "./db/prisma.js";
 import { connectRedis, redis } from "./lib/redis.js";
+import { hasDockerfile } from "./services/deployment.service.js";
+import { cloneRepository } from "./services/git.service.js";
 
 const DEPLOYMENT_QUEUE = "deployment-queue";
 
@@ -43,9 +45,52 @@ async function startWorker() {
         },
       });
 
-      console.log(`Deployment ${deploymentId} moved to CLONING`);
+      const targetDir = await cloneRepository(
+        deployment.githubRepoUrl,
+        deployment.id,
+      );
+
+      console.log(`Repository cloned to ${targetDir}`);
+
+      const dockerfileExists = hasDockerfile(deployment.id);
+
+      if (!dockerfileExists) {
+        await prisma.deployment.update({
+          where: {
+            id: deployment.id,
+          },
+          data: {
+            status: "FAILED",
+            errorMessage: "Dockerfile not found",
+          },
+        });
+
+        continue;
+      }
+
+      await prisma.deployment.update({
+        where: {
+          id: deploymentId,
+        },
+        data: {
+          status: "BUILDING",
+        },
+      });
+
+      console.log(`Deployment ${deployment.id} ready for build`);
     } catch (error) {
       console.error(`Failed processing ${deploymentId}`, error);
+
+      await prisma.deployment.update({
+        where: {
+          id: deploymentId,
+        },
+        data: {
+          status: "FAILED",
+          errorMessage:
+            error instanceof Error ? error.message : "Unknown error",
+        },
+      });
     }
   }
 }
