@@ -79,3 +79,11 @@ export async function stopAndRemoveContainer(
     console.error(`Failed to remove container ${containerId}`, error);
   }
 }
+
+export async function removeImage(imageTag: string) {
+  try {
+    await execAsync(`docker image rm ${imageTag}`);
+  } catch (error) {
+    console.error(`Failed to remove image ${imageTag}`, error);
+  }
+}

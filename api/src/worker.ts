@@ -2,11 +2,13 @@ import "./config/env.js";
 
 import { prisma } from "./db/prisma.js";
 import { connectRedis, redis } from "./lib/redis.js";
+import { cleanupWorkspace } from "./services/cleanup.service.js";
 import { hasDockerfile } from "./services/deployment.service.js";
 import {
   buildImage,
   getExposedPort,
   isContainerRunning,
+  removeImage,
   runContainer,
   stopAndRemoveContainer,
 } from "./services/docker.service.js";
@@ -37,6 +39,9 @@ async function startWorker() {
       "QUEUE",
       "Deployment picked up by worker",
     );
+
+    let imageTag: string | null = null;
+    let containerId: string | null = null;
 
     try {
       const deployment = await prisma.deployment.findUnique({
@@ -84,17 +89,7 @@ async function startWorker() {
       const dockerfileExists = hasDockerfile(deployment.id);
 
       if (!dockerfileExists) {
-        await prisma.deployment.update({
-          where: {
-            id: deployment.id,
-          },
-          data: {
-            status: "FAILED",
-            errorMessage: "Dockerfile not found",
-          },
-        });
-        console.log("Dockerfile not found");
-        continue;
+        throw new Error("Dockerfile not found");
       }
 
       await prisma.deployment.update({
@@ -108,13 +103,17 @@ async function startWorker() {
 
       await addDeploymentLog(deploymentId, "BUILDING", "Building Docker image");
 
-      const imageTag = await buildImage(deployment.id);
+      imageTag = await buildImage(deployment.id);
 
       await addDeploymentLog(
         deploymentId,
         "BUILDING",
         `Docker image built successfully (${imageTag})`,
       );
+
+      await cleanupWorkspace(deployment.id);
+
+      await addDeploymentLog(deploymentId, "CLEANUP", "Removed workspace");
 
       console.log(`Built image ${imageTag}`);
 
@@ -137,7 +136,7 @@ async function startWorker() {
         `Starting container on host port ${hostPort}`,
       );
 
-      const containerId = await runContainer(imageTag, hostPort, containerPort);
+      containerId = await runContainer(imageTag, hostPort, containerPort);
 
       console.log(`Started container ${containerId}`);
 
@@ -146,18 +145,8 @@ async function startWorker() {
       const running = await isContainerRunning(containerId);
 
       if (!running) {
-        await prisma.deployment.update({
-          where: {
-            id: deployment.id,
-          },
-          data: {
-            status: "FAILED",
-            errorMessage: "Container exited immediately",
-          },
-        });
-        console.log("container is not running");
-
-        continue;
+        console.log("Container exited immediately after startup");
+        throw new Error("Container exited immediately after startup");
       }
 
       await addDeploymentLog(
@@ -177,7 +166,6 @@ async function startWorker() {
       const healthy = await waitForHealthCheck(hostPort);
 
       if (!healthy) {
-        await stopAndRemoveContainer(containerId);
         throw new Error(
           `Application failed health check after 30 seconds on port ${containerPort}`,
         );
@@ -213,6 +201,20 @@ async function startWorker() {
       console.log(`Application available at http://localhost:${hostPort}`);
     } catch (error) {
       console.error(`Failed processing ${deploymentId}`, error);
+
+      if (imageTag || containerId) {
+        if (containerId) {
+          await stopAndRemoveContainer(containerId);
+        }
+        if (imageTag) {
+          await removeImage(imageTag);
+        }
+        await addDeploymentLog(
+          deploymentId,
+          "CLEANUP",
+          "Removed failed deployment resources",
+        );
+      }
 
       await addDeploymentLog(
         deploymentId,
