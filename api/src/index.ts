@@ -59,7 +59,7 @@ app.post("/api/deployments", async (req, res) => {
   }
 });
 
-app.get("/deployments/:id/logs", async (req, res) => {
+app.get("api/deployments/:id/logs", async (req, res) => {
   const deploymentId = req.params.id;
   const logs = await prisma.deploymentLog.findMany({
     where: {
