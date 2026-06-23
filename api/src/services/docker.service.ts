@@ -69,3 +69,13 @@ export async function getExposedPort(imageTag: string): Promise<number> {
 
   return port;
 }
+
+export async function stopAndRemoveContainer(
+  containerId: string,
+): Promise<void> {
+  try {
+    await execAsync(`docker rm -f ${containerId}`);
+  } catch (error) {
+    console.error(`Failed to remove container ${containerId}`, error);
+  }
+}

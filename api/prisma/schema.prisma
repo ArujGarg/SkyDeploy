@@ -24,24 +24,25 @@ enum DeploymentStatus {
 
 model Deployment {
   id            String            @id @default(cuid())
-
   githubRepoUrl String
   branch        String @default("main")
-
   status        DeploymentStatus
-
   imageTag      String?
-
   containerId  String?
-
   hostPort      Int?
-
   deployedUrl   String?
-
   buildLogs     String?
-
   errorMessage  String?
-
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
+  logs DeploymentLog[]
+}
+
+model DeploymentLog {
+  id           String @id @default(cuid())
+  deploymentId String
+  stage        String
+  message      String
+  createdAt    DateTime @default(now())
+  deployment   Deployment @relation(fields: [deploymentId], references: [id], onDelete: Cascade)
 }

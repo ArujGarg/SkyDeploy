@@ -59,6 +59,25 @@ app.post("/api/deployments", async (req, res) => {
   }
 });
 
+app.get("/deployments/:id/logs", async (req, res) => {
+  const deploymentId = req.params.id;
+  const logs = await prisma.deploymentLog.findMany({
+    where: {
+      deploymentId,
+    },
+    select: {
+      stage: true,
+      message: true,
+      createdAt: true,
+    },
+    orderBy: {
+      createdAt: "asc",
+    },
+  });
+
+  res.status(200).json(logs);
+});
+
 await connectRedis();
 
 app.listen(3001, () => {

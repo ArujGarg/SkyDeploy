@@ -8,8 +8,11 @@ import {
   getExposedPort,
   isContainerRunning,
   runContainer,
+  stopAndRemoveContainer,
 } from "./services/docker.service.js";
 import { cloneRepository } from "./services/git.service.js";
+import { waitForHealthCheck } from "./services/health.service.js";
+import { addDeploymentLog } from "./services/log.service.js";
 import { getAvailablePort } from "./utils/port.util.js";
 
 const DEPLOYMENT_QUEUE = "deployment-queue";
@@ -28,6 +31,13 @@ async function startWorker() {
       continue;
     }
     console.log(`Received deployment ${deploymentId}`);
+
+    await addDeploymentLog(
+      deploymentId,
+      "QUEUE",
+      "Deployment picked up by worker",
+    );
+
     try {
       const deployment = await prisma.deployment.findUnique({
         where: {
@@ -52,9 +62,21 @@ async function startWorker() {
         },
       });
 
+      await addDeploymentLog(
+        deploymentId,
+        "CLONING",
+        `Cloning repository ${deployment.githubRepoUrl}`,
+      );
+
       const targetDir = await cloneRepository(
         deployment.githubRepoUrl,
         deployment.id,
+      );
+
+      await addDeploymentLog(
+        deploymentId,
+        "CLONING",
+        "Repository cloned successfully",
       );
 
       console.log(`Repository cloned to ${targetDir}`);
@@ -84,7 +106,15 @@ async function startWorker() {
         },
       });
 
+      await addDeploymentLog(deploymentId, "BUILDING", "Building Docker image");
+
       const imageTag = await buildImage(deployment.id);
+
+      await addDeploymentLog(
+        deploymentId,
+        "BUILDING",
+        `Docker image built successfully (${imageTag})`,
+      );
 
       console.log(`Built image ${imageTag}`);
 
@@ -101,7 +131,14 @@ async function startWorker() {
       const containerPort = await getExposedPort(imageTag);
       const hostPort = await getAvailablePort();
 
+      await addDeploymentLog(
+        deploymentId,
+        "DEPLOYING",
+        `Starting container on host port ${hostPort}`,
+      );
+
       const containerId = await runContainer(imageTag, hostPort, containerPort);
+
       console.log(`Started container ${containerId}`);
 
       await new Promise((resolve) => setTimeout(resolve, 2000));
@@ -123,7 +160,43 @@ async function startWorker() {
         continue;
       }
 
+      await addDeploymentLog(
+        deploymentId,
+        "DEPLOYING",
+        `Container started (${containerId})`,
+      );
+
       console.log("container is running");
+
+      await addDeploymentLog(
+        deploymentId,
+        "HEALTH_CHECK",
+        "Checking application health",
+      );
+
+      const healthy = await waitForHealthCheck(hostPort);
+
+      if (!healthy) {
+        await stopAndRemoveContainer(containerId);
+        throw new Error(
+          `Application failed health check after 30 seconds on port ${containerPort}`,
+        );
+      }
+
+      await addDeploymentLog(
+        deploymentId,
+        "HEALTH_CHECK",
+        "Application passed health check",
+      );
+
+      console.log("Containter is healthy and listening");
+
+      await addDeploymentLog(
+        deploymentId,
+        "SUCCESS",
+        `Deployment available at http://localhost:${hostPort}`,
+      );
+
       await prisma.deployment.update({
         where: {
           id: deployment.id,
@@ -140,6 +213,12 @@ async function startWorker() {
       console.log(`Application available at http://localhost:${hostPort}`);
     } catch (error) {
       console.error(`Failed processing ${deploymentId}`, error);
+
+      await addDeploymentLog(
+        deploymentId,
+        "ERROR",
+        error instanceof Error ? error.message : "Unknown error",
+      );
 
       await prisma.deployment.update({
         where: {
