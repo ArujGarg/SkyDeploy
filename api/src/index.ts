@@ -4,9 +4,11 @@ import express from "express";
 import { prisma } from "./db/prisma.js";
 import { connectRedis } from "./lib/redis.js";
 import { enqueueDeployment } from "./services/queue.service.js";
+import cors from "cors";
 
 const app = express();
 
+app.use(cors());
 app.use(express.json());
 
 app.get("/api/deployments/:id", async (req, res) => {
@@ -59,7 +61,7 @@ app.post("/api/deployments", async (req, res) => {
   }
 });
 
-app.get("api/deployments/:id/logs", async (req, res) => {
+app.get("/api/deployments/:id/logs", async (req, res) => {
   const deploymentId = req.params.id;
   const logs = await prisma.deploymentLog.findMany({
     where: {
