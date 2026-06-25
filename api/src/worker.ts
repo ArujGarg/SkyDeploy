@@ -54,6 +54,9 @@ async function startWorker() {
         where: {
           id: deploymentId,
         },
+        include: {
+          project: true,
+        },
       });
 
       if (!deployment) {
@@ -76,11 +79,11 @@ async function startWorker() {
       await addDeploymentLog(
         deploymentId,
         "CLONING",
-        `Cloning repository ${deployment.githubRepoUrl}`,
+        `Cloning repository ${deployment.project.githubRepoUrl}`,
       );
 
       const targetDir = await cloneRepository(
-        deployment.githubRepoUrl,
+        deployment.project.githubRepoUrl,
         deployment.id,
       );
 
@@ -183,20 +186,6 @@ async function startWorker() {
 
       subdomain = deployment.id.slice(0, 8);
 
-      await prisma.deployment.update({
-        where: {
-          id: deployment.id,
-        },
-        data: {
-          status: "SUCCESS",
-          imageTag,
-          containerId,
-          hostPort,
-          subdomain,
-          deployedUrl: `http://${subdomain}.localhost`,
-        },
-      });
-
       await createNginxConfig(subdomain, hostPort);
 
       await addDeploymentLog(
@@ -209,12 +198,6 @@ async function startWorker() {
 
       await addDeploymentLog(deploymentId, "NGINX", "Reloaded nginx");
 
-      await addDeploymentLog(
-        deploymentId,
-        "SUCCESS",
-        `Deployment available at http://${subdomain}.localhost`,
-      );
-
       await prisma.deployment.update({
         where: {
           id: deployment.id,
@@ -227,6 +210,12 @@ async function startWorker() {
           deployedUrl: `http://${subdomain}.localhost`,
         },
       });
+
+      await addDeploymentLog(
+        deploymentId,
+        "SUCCESS",
+        `Deployment available at http://${subdomain}.localhost`,
+      );
 
       console.log(`Application available at http://localhost:${hostPort}`);
     } catch (error) {

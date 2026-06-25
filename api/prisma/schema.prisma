@@ -22,10 +22,19 @@ enum DeploymentStatus {
   FAILED
 }
 
-model Deployment {
-  id            String            @id @default(cuid())
+model Project {
+  id        String @id @default(cuid())
+  name      String
   githubRepoUrl String
   branch        String @default("main")
+  createdAt DateTime @default(now())
+  deployments Deployment[]
+}
+
+model Deployment {
+  id            String            @id @default(cuid())
+  projectId String
+  project Project @relation(fields: [projectId], references: [id])
   status        DeploymentStatus
   imageTag      String?
   containerId  String?

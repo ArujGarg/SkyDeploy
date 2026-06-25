@@ -11,6 +11,136 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+app.post("/api/projects", async (req, res) => {
+  try {
+    const { name, githubRepoUrl, branch } = req.body;
+
+    const project = await prisma.project.create({
+      data: {
+        name,
+        githubRepoUrl,
+        branch: branch || "main",
+      },
+    });
+
+    return res.status(201).json(project);
+  } catch (error) {
+    console.error(error);
+
+    return res.status(500).json({
+      message: "Failed to create project",
+    });
+  }
+});
+
+app.get("/api/projects", async (req, res) => {
+  try {
+    const projects = await prisma.project.findMany({
+      orderBy: {
+        createdAt: "desc",
+      },
+    });
+
+    return res.status(200).json(projects);
+  } catch (error) {
+    console.error(error);
+
+    return res.status(500).json({
+      message: "Failed to fetch projects",
+    });
+  }
+});
+
+app.get("/api/projects/:id", async (req, res) => {
+  try {
+    const project = await prisma.project.findUnique({
+      where: {
+        id: req.params.id,
+      },
+    });
+
+    if (!project) {
+      return res.status(404).json({
+        message: "Project not found",
+      });
+    }
+
+    return res.status(200).json(project);
+  } catch (error) {
+    console.error(error);
+
+    return res.status(500).json({
+      message: "Failed to fetch project",
+    });
+  }
+});
+
+app.post("/api/projects/:id/deploy", async (req, res) => {
+  try {
+    const project = await prisma.project.findUnique({
+      where: {
+        id: req.params.id,
+      },
+    });
+
+    if (!project) {
+      return res.status(404).json({
+        message: "Project not found",
+      });
+    }
+
+    const deployment = await prisma.deployment.create({
+      data: {
+        projectId: project.id,
+        status: "QUEUED",
+      },
+    });
+
+    await enqueueDeployment(deployment.id);
+
+    return res.status(201).json(deployment);
+  } catch (error) {
+    console.error(error);
+
+    return res.status(500).json({
+      message: "Failed to deploy project",
+    });
+  }
+});
+
+app.get("/api/projects/:id/deployments", async (req, res) => {
+  try {
+    const project = await prisma.project.findUnique({
+      where: {
+        id: req.params.id,
+      },
+    });
+
+    if (!project) {
+      return res.status(404).json({
+        message: "Project not found",
+      });
+    }
+
+    const deployments = await prisma.deployment.findMany({
+      where: {
+        projectId: project.id,
+      },
+      orderBy: {
+        createdAt: "desc",
+      },
+    });
+
+    return res.status(200).json(deployments);
+  } catch (error) {
+    console.error(error);
+
+    return res.status(500).json({
+      message: "Failed to fetch deployments",
+    });
+  }
+});
+
 app.get("/api/deployments/:id", async (req, res) => {
   try {
     const { id } = req.params;
@@ -33,30 +163,6 @@ app.get("/api/deployments/:id", async (req, res) => {
 
     return res.status(500).json({
       message: "Failed to fetch deployment",
-    });
-  }
-});
-
-app.post("/api/deployments", async (req, res) => {
-  try {
-    const { githubRepoUrl, branch } = req.body;
-
-    const deployment = await prisma.deployment.create({
-      data: {
-        githubRepoUrl,
-        branch: branch || "main",
-        status: "QUEUED",
-      },
-    });
-
-    await enqueueDeployment(deployment.id);
-
-    res.status(201).json(deployment);
-  } catch (error) {
-    console.error(error);
-
-    res.status(500).json({
-      message: "Failed to create deployment",
     });
   }
 });
