@@ -35,7 +35,16 @@ app.post("/api/projects", async (req, res) => {
 
 app.get("/api/projects", async (req, res) => {
   try {
+    //taking the latest deployment in projects to avoind N+1 query problem
     const projects = await prisma.project.findMany({
+      include: {
+        deployments: {
+          take: 1,
+          orderBy: {
+            createdAt: "desc",
+          },
+        },
+      },
       orderBy: {
         createdAt: "desc",
       },
