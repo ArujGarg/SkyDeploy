@@ -15,6 +15,11 @@ import {
 import { cloneRepository } from "./services/git.service.js";
 import { waitForHealthCheck } from "./services/health.service.js";
 import { addDeploymentLog } from "./services/log.service.js";
+import {
+  createNginxConfig,
+  deleteNginxConfig,
+  reloadNginx,
+} from "./services/nginx.service.js";
 import { getAvailablePort } from "./utils/port.util.js";
 
 const DEPLOYMENT_QUEUE = "deployment-queue";
@@ -42,6 +47,7 @@ async function startWorker() {
 
     let imageTag: string | null = null;
     let containerId: string | null = null;
+    let subdomain: string | null = null;
 
     try {
       const deployment = await prisma.deployment.findUnique({
@@ -111,10 +117,6 @@ async function startWorker() {
         `Docker image built successfully (${imageTag})`,
       );
 
-      await cleanupWorkspace(deployment.id);
-
-      await addDeploymentLog(deploymentId, "CLEANUP", "Removed workspace");
-
       console.log(`Built image ${imageTag}`);
 
       await prisma.deployment.update({
@@ -179,10 +181,38 @@ async function startWorker() {
 
       console.log("Containter is healthy and listening");
 
+      subdomain = deployment.id.slice(0, 8);
+
+      await prisma.deployment.update({
+        where: {
+          id: deployment.id,
+        },
+        data: {
+          status: "SUCCESS",
+          imageTag,
+          containerId,
+          hostPort,
+          subdomain,
+          deployedUrl: `http://${subdomain}.localhost`,
+        },
+      });
+
+      await createNginxConfig(subdomain, hostPort);
+
+      await addDeploymentLog(
+        deploymentId,
+        "NGINX",
+        `Created nginx route ${subdomain}.localhost`,
+      );
+
+      await reloadNginx();
+
+      await addDeploymentLog(deploymentId, "NGINX", "Reloaded nginx");
+
       await addDeploymentLog(
         deploymentId,
         "SUCCESS",
-        `Deployment available at http://localhost:${hostPort}`,
+        `Deployment available at http://${subdomain}.localhost`,
       );
 
       await prisma.deployment.update({
@@ -194,7 +224,7 @@ async function startWorker() {
           imageTag,
           containerId,
           hostPort,
-          deployedUrl: `http://localhost:${hostPort}`,
+          deployedUrl: `http://${subdomain}.localhost`,
         },
       });
 
@@ -216,6 +246,18 @@ async function startWorker() {
         );
       }
 
+      if (subdomain) {
+        await deleteNginxConfig(subdomain);
+        await addDeploymentLog(
+          deploymentId,
+          "NGINX",
+          "Removed nginx configuration",
+        );
+
+        await reloadNginx();
+        await addDeploymentLog(deploymentId, "NGINX", "Reloaded nginx");
+      }
+
       await addDeploymentLog(
         deploymentId,
         "ERROR",
@@ -232,6 +274,14 @@ async function startWorker() {
             error instanceof Error ? error.message : "Unknown error",
         },
       });
+    } finally {
+      try {
+        await cleanupWorkspace(deploymentId);
+
+        await addDeploymentLog(deploymentId, "CLEANUP", "Removed workspace");
+      } catch (error) {
+        console.error("Failed to cleanup workspace", error);
+      }
     }
   }
 }

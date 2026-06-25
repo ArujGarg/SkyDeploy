@@ -30,12 +30,13 @@ model Deployment {
   imageTag      String?
   containerId  String?
   hostPort      Int?
-  deployedUrl   String?
+  deployedUrl   String? 
   buildLogs     String?
   errorMessage  String?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
   logs DeploymentLog[]
+  subdomain String? @unique
 }
 
 model DeploymentLog {
