@@ -82,7 +82,7 @@ export default function ProjectCard({ project }: Props) {
             <button
               disabled={deployMutation.isPending}
               onClick={() => deployMutation.mutate()}
-              className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-zinc-900 px-4 text-sm font-medium text-white transition hover:bg-zinc-800 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-zinc-900 px-4 text-sm font-medium text-white transition hover:bg-zinc-800 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
             >
               {deployMutation.isPending ? (
                 <>
@@ -98,7 +98,7 @@ export default function ProjectCard({ project }: Props) {
             </button>
             <button
               onClick={() => setExpanded(!expanded)}
-              className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-3 text-sm font-medium text-zinc-700 transition hover:bg-zinc-50 hover:text-zinc-900 active:bg-zinc-100"
+              className="cursor-pointer inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-3 text-sm font-medium text-zinc-700 transition hover:bg-zinc-50 hover:text-zinc-900 active:bg-zinc-100"
             >
               <span>History</span>
               <ChevronDown

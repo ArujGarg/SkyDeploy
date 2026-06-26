@@ -73,7 +73,7 @@ export default function CreateProjectForm() {
               branch,
             })
           }
-          className="mt-2 flex cursor-pointer items-center justify-center gap-2 rounded-xl bg-zinc-900 px-6 py-3 font-medium text-white transition hover:bg-zinc-800 disabled:cursor-not-allowed disabled:bg-zinc-400"
+          className="cursor-pointer mt-2 flex cursor-pointer items-center justify-center gap-2 rounded-xl bg-zinc-900 px-6 py-3 font-medium text-white transition hover:bg-zinc-800 disabled:cursor-not-allowed disabled:bg-zinc-400"
         >
           {mutation.isPending ? (
             <>
