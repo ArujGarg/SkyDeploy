@@ -26,8 +26,8 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
 
         token.name = profile.name;
         token.email = profile.email;
-        token.picture = profile.avatar_url;
-        token.login = profile.login;
+        // token.picture = profile.avatar_url;
+        // token.login = profile.login;
       }
 
       return token;
