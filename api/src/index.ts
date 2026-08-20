@@ -12,22 +12,13 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-function resolveAuthenticatedUserId(req: express.Request) {
-  const requestedUserId =
-    typeof req.body?.userId === "string" ? req.body.userId : undefined;
-
-  if (!requestedUserId) {
-    return undefined;
-  }
-
+function authenticateInternalRequest(req: express.Request) {
   const expectedSecret = process.env.INTERNAL_API_SECRET;
   const providedSecret = req.header("x-internal-api-secret");
 
-  if (!expectedSecret || providedSecret !== expectedSecret) {
-    return null;
-  }
-
-  return requestedUserId;
+  return Boolean(
+    expectedSecret && providedSecret && providedSecret === expectedSecret,
+  );
 }
 
 app.get("/api/deployments/:id", async (req, res) => {
@@ -58,7 +49,19 @@ app.get("/api/deployments/:id", async (req, res) => {
 
 app.post("/api/deployments", async (req, res) => {
   try {
-    const { githubRepoUrl, branch } = req.body;
+    if (!authenticateInternalRequest(req)) {
+      return res.status(403).json({
+        message: "Invalid internal API credentials",
+      });
+    }
+
+    const { githubRepoUrl, branch, userId } = req.body;
+
+    if (typeof userId !== "string" || !userId) {
+      return res.status(400).json({
+        message: "Authenticated user ID is required",
+      });
+    }
 
     if (
       typeof githubRepoUrl !== "string" ||
@@ -69,21 +72,12 @@ app.post("/api/deployments", async (req, res) => {
       });
     }
 
-    const userId = resolveAuthenticatedUserId(req);
-    console.log("userId", userId);
-
-    if (userId === null) {
-      return res.status(403).json({
-        message: "Invalid internal API credentials",
-      });
-    }
-
     const deployment = await prisma.deployment.create({
       data: {
         githubRepoUrl,
         branch: typeof branch === "string" && branch ? branch : "main",
         status: "QUEUED",
-        ...(userId ? { userId } : {}),
+        userId,
       },
     });
 
