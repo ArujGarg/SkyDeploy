@@ -8,10 +8,14 @@ generator client {
   output   = "../src/generated/prisma"
 }
 
+generator frontendClient {
+  provider = "prisma-client"
+  output   = "../../frontend/generated/prisma"
+}
+
 datasource db {
   provider = "postgresql"
 }
-
 
 enum DeploymentStatus {
   QUEUED
@@ -22,21 +26,69 @@ enum DeploymentStatus {
   FAILED
 }
 
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String?   @unique
+  emailVerified DateTime?
+  image         String?
+  accounts      Account[]
+  sessions      Session[]
+  deployments   Deployment[]
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
 model Deployment {
-  id            String            @id @default(cuid())
+  id            String           @id @default(cuid())
   githubRepoUrl String
-  branch        String @default("main")
+  branch        String           @default("main")
   status        DeploymentStatus
   imageTag      String?
-  containerId  String?
+  containerId   String?
   hostPort      Int?
-  deployedUrl   String? 
+  deployedUrl   String?
   buildLogs     String?
   errorMessage  String?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-  logs DeploymentLog[]
-  subdomain String? @unique
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+  logs          DeploymentLog[]
+  subdomain     String?          @unique
+  userId        String?
+  user          User?            @relation(fields: [userId], references: [id], onDelete: SetNull)
 }
 
 model DeploymentLog {

@@ -3,6 +3,7 @@ import "./config/env.js";
 import express from "express";
 import { prisma } from "./db/prisma.js";
 import { connectRedis } from "./lib/redis.js";
+import { isAllowedGithubRepoUrl } from "./services/git.service.js";
 import { enqueueDeployment } from "./services/queue.service.js";
 import cors from "cors";
 
@@ -10,6 +11,24 @@ const app = express();
 
 app.use(cors());
 app.use(express.json());
+
+function resolveAuthenticatedUserId(req: express.Request) {
+  const requestedUserId =
+    typeof req.body?.userId === "string" ? req.body.userId : undefined;
+
+  if (!requestedUserId) {
+    return undefined;
+  }
+
+  const expectedSecret = process.env.INTERNAL_API_SECRET;
+  const providedSecret = req.header("x-internal-api-secret");
+
+  if (!expectedSecret || providedSecret !== expectedSecret) {
+    return null;
+  }
+
+  return requestedUserId;
+}
 
 app.get("/api/deployments/:id", async (req, res) => {
   try {
@@ -41,11 +60,30 @@ app.post("/api/deployments", async (req, res) => {
   try {
     const { githubRepoUrl, branch } = req.body;
 
+    if (
+      typeof githubRepoUrl !== "string" ||
+      !isAllowedGithubRepoUrl(githubRepoUrl)
+    ) {
+      return res.status(400).json({
+        message: "A valid GitHub HTTPS repository URL is required",
+      });
+    }
+
+    const userId = resolveAuthenticatedUserId(req);
+    console.log("userId", userId);
+
+    if (userId === null) {
+      return res.status(403).json({
+        message: "Invalid internal API credentials",
+      });
+    }
+
     const deployment = await prisma.deployment.create({
       data: {
         githubRepoUrl,
-        branch: branch || "main",
+        branch: typeof branch === "string" && branch ? branch : "main",
         status: "QUEUED",
+        ...(userId ? { userId } : {}),
       },
     });
 
@@ -83,5 +121,5 @@ app.get("/api/deployments/:id/logs", async (req, res) => {
 await connectRedis();
 
 app.listen(3001, () => {
-  console.log("Server is running on port 3000");
+  console.log("Server is running on port 3001");
 });

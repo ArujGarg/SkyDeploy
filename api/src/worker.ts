@@ -79,9 +79,28 @@ async function startWorker() {
         `Cloning repository ${deployment.githubRepoUrl}`,
       );
 
+      let accessToken: string | null = null;
+
+      if (deployment.userId) {
+        const githubAccount = await prisma.account.findFirst({
+          where: {
+            userId: deployment.userId,
+            provider: "github",
+          },
+          select: {
+            access_token: true,
+          },
+        });
+
+        accessToken = githubAccount?.access_token ?? null;
+      }
+
       const targetDir = await cloneRepository(
         deployment.githubRepoUrl,
         deployment.id,
+        {
+          accessToken,
+        },
       );
 
       await addDeploymentLog(
