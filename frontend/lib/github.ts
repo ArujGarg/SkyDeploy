@@ -1,3 +1,5 @@
+import { prisma } from "@/lib/prisma";
+
 export type GithubRepo = {
   id: number;
   name: string;
@@ -21,7 +23,111 @@ export class GithubApiError extends Error {
   }
 }
 
-export async function fetchGithubRepos(accessToken: string): Promise<GithubRepo[]> {
+export async function getValidGithubAccessToken(userId: string) {
+  const account = await prisma.account.findFirst({
+    where: {
+      userId,
+      provider: "github",
+    },
+    select: {
+      id: true,
+      access_token: true,
+      refresh_token: true,
+      expires_at: true,
+    },
+  });
+
+  if (!account?.access_token) {
+    throw new GithubApiError(
+      "GitHub account is not connected. Please sign in again.",
+      401,
+      "UNAUTHORIZED",
+    );
+  }
+
+  // Token has no expiry information.
+  // In that case, use the existing token.
+  if (!account.expires_at) {
+    return account.access_token;
+  }
+
+  // expires_at is Unix time in seconds.
+  // Date.now() is milliseconds.
+  const expiresAt = account.expires_at * 1000;
+
+  // Refresh one minute before expiry.
+  const isExpired = expiresAt <= Date.now() + 60_000;
+
+  if (!isExpired) {
+    return account.access_token;
+  }
+
+  if (!account.refresh_token) {
+    throw new GithubApiError(
+      "GitHub access has expired. Please sign in again.",
+      401,
+      "UNAUTHORIZED",
+    );
+  }
+
+  const clientId = process.env.AUTH_GITHUB_ID;
+  const clientSecret = process.env.AUTH_GITHUB_SECRET;
+
+  if (!clientId || !clientSecret) {
+    throw new Error("GitHub OAuth credentials are not configured");
+  }
+
+  const response = await fetch("https://github.com/login/oauth/access_token", {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      client_id: clientId,
+      client_secret: clientSecret,
+      grant_type: "refresh_token",
+      refresh_token: account.refresh_token,
+    }),
+  });
+
+  const data = await response.json();
+
+  if (
+    !response.ok ||
+    data.error ||
+    !data.access_token ||
+    !data.refresh_token ||
+    !data.expires_in
+  ) {
+    console.error("GitHub token refresh failed:", data);
+
+    throw new GithubApiError(
+      "GitHub access has expired. Please sign in again.",
+      401,
+      "UNAUTHORIZED",
+    );
+  }
+
+  await prisma.account.update({
+    where: {
+      id: account.id,
+    },
+    data: {
+      access_token: data.access_token,
+      refresh_token: data.refresh_token,
+      expires_at: Math.floor(Date.now() / 1000) + data.expires_in,
+      token_type: data.token_type,
+      scope: data.scope,
+    },
+  });
+
+  return data.access_token;
+}
+
+export async function fetchGithubRepos(
+  accessToken: string,
+): Promise<GithubRepo[]> {
   const repos: GithubRepo[] = [];
   const perPage = 100;
   const maxPages = 5;
@@ -31,7 +137,10 @@ export async function fetchGithubRepos(accessToken: string): Promise<GithubRepo[
     url.searchParams.set("per_page", String(perPage));
     url.searchParams.set("page", String(page));
     url.searchParams.set("sort", "updated");
-    url.searchParams.set("affiliation", "owner,collaborator,organization_member");
+    url.searchParams.set(
+      "affiliation",
+      "owner,collaborator,organization_member",
+    );
 
     const response = await fetch(url, {
       headers: {
