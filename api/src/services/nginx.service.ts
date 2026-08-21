@@ -24,7 +24,7 @@ export async function createNginxConfig(subdomain: string, hostPort: number) {
 }
 
 export async function reloadNginx() {
-  await execAsync("nginx -s reload");
+  await execAsync("sudo /usr/sbin/nginx -s reload");
 }
 
 export async function deleteNginxConfig(subdomain: string): Promise<void> {
