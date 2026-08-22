@@ -8,9 +8,9 @@ export async function createNginxConfig(subdomain: string, hostPort: number) {
   const config = `
   server {
       listen 80;
-  
-      server_name ${subdomain}.localhost;
-  
+
+      server_name _;
+
       location / {
           proxy_pass http://127.0.0.1:${hostPort};
       }
