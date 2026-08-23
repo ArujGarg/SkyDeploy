@@ -54,7 +54,9 @@ export default function DeployForm({
   const [loading, setLoading] = useState(false);
   const [repos, setRepos] = useState<GithubRepo[]>(initialRepos);
   const [reposLoading, setReposLoading] = useState(false);
-  const [reposError, setReposError] = useState<string | null>(initialReposError);
+  const [reposError, setReposError] = useState<string | null>(
+    initialReposError,
+  );
   const [deployError, setDeployError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [activeRepoUrl, setActiveRepoUrl] = useState<string | null>(null);
@@ -326,7 +328,9 @@ export default function DeployForm({
 
           {deployError && (
             <div className="mt-4 rounded-2xl border border-red-200 bg-red-50 p-5">
-              <p className="font-medium text-red-700">Could not start deployment</p>
+              <p className="font-medium text-red-700">
+                Could not start deployment
+              </p>
               <p className="mt-2 text-sm text-red-600">{deployError}</p>
             </div>
           )}

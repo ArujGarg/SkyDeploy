@@ -1,4 +1,5 @@
 import { auth } from "@/auth";
+import { getValidGithubAccessToken } from "@/lib/github";
 
 export const runtime = "nodejs";
 
@@ -10,6 +11,21 @@ export async function POST(request: Request) {
   if (!session?.user?.id) {
     return Response.json(
       { message: "Sign in with GitHub to deploy a repository." },
+      { status: 401 },
+    );
+  }
+
+  try {
+    // Make sure the DB contains a valid/fresh token
+    await getValidGithubAccessToken(session.user.id);
+  } catch (error) {
+    return Response.json(
+      {
+        message:
+          error instanceof Error
+            ? error.message
+            : "GitHub authentication failed.",
+      },
       { status: 401 },
     );
   }
