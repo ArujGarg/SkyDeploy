@@ -8,8 +8,17 @@ export async function createNginxConfig(subdomain: string, hostPort: number) {
   const config = `
     server {
         listen 80;
-
         server_name ${subdomain}.aruj.dev;
+
+        return 301 https://$host$request_uri;
+    }
+
+    server {
+        listen 443 ssl;
+        server_name ${subdomain}.aruj.dev;
+
+        ssl_certificate /etc/letsencrypt/live/aruj.dev/fullchain.pem;
+        ssl_certificate_key /etc/letsencrypt/live/aruj.dev/privkey.pem;
 
         location / {
             proxy_pass http://127.0.0.1:${hostPort};
@@ -20,7 +29,7 @@ export async function createNginxConfig(subdomain: string, hostPort: number) {
             proxy_set_header X-Forwarded-Proto $scheme;
         }
     }
-    `;
+  `;
 
   await fs.writeFile(
     `${process.env.NGINX_CONFIG_DIR}/${subdomain}.conf`,
