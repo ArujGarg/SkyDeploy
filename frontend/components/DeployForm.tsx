@@ -8,8 +8,6 @@ import { GithubIcon } from "./icons/Github";
 import { RepositoryList } from "./RepositoryList";
 import type { GithubRepo } from "@/lib/github";
 
-const API_URL = "http://localhost:3001/api";
-
 type Deployment = {
   id: string;
   status:
@@ -139,17 +137,13 @@ export default function DeployForm({
 
     const interval = setInterval(async () => {
       try {
-        const deploymentRes = await fetch(
-          `${API_URL}/deployments/${deploymentId}`,
-        );
+        const deploymentRes = await fetch(`/api/deployments/${deploymentId}`);
 
         const deploymentData = await deploymentRes.json();
 
         setDeployment(deploymentData);
 
-        const logsRes = await fetch(
-          `${API_URL}/deployments/${deploymentId}/logs`,
-        );
+        const logsRes = await fetch(`/api/deployments/${deploymentId}/logs`);
 
         const logsData = await logsRes.json();
 
