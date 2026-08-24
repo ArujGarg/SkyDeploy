@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { signIn, signOut } from "next-auth/react";
-import { Rocket } from "lucide-react";
+import { LogOut, Rocket } from "lucide-react";
 import type { Session } from "next-auth";
 import { GithubIcon } from "./icons/Github";
 import { RepositoryList } from "./RepositoryList";
@@ -78,7 +78,7 @@ export default function DeployForm({
       setLogs([]);
       setDeploymentId(null);
 
-      // Remember which repo was clicked.
+      // Remember which repository owns this deployment.
       setActiveRepoUrl(githubRepoUrl);
       setDeploymentRepoUrl(githubRepoUrl);
 
@@ -103,7 +103,7 @@ export default function DeployForm({
     } catch (error) {
       console.error(error);
 
-      // There is no valid deployment to show if creation failed.
+      // Don't show a deployment panel when deployment creation itself failed.
       setDeploymentRepoUrl(null);
 
       setDeployError(
@@ -122,53 +122,54 @@ export default function DeployForm({
   useEffect(() => {
     if (!deploymentId) return;
 
+    let stopped = false;
+
     const fetchDeploymentData = async () => {
       try {
-        const deploymentRes = await fetch(`/api/deployments/${deploymentId}`);
+        const [deploymentRes, logsRes] = await Promise.all([
+          fetch(`/api/deployments/${deploymentId}`),
+          fetch(`/api/deployments/${deploymentId}/logs`),
+        ]);
 
         const deploymentData = await deploymentRes.json();
-
-        setDeployment(deploymentData);
-
-        const logsRes = await fetch(`/api/deployments/${deploymentId}/logs`);
-
         const logsData = await logsRes.json();
 
-        setLogs(logsData);
-      } catch (error) {
-        console.error(error);
-      }
-    };
-
-    // Fetch immediately instead of waiting 2 seconds.
-    void fetchDeploymentData();
-
-    const interval = setInterval(async () => {
-      try {
-        const deploymentRes = await fetch(`/api/deployments/${deploymentId}`);
-
-        const deploymentData = await deploymentRes.json();
+        if (stopped) return;
 
         setDeployment(deploymentData);
-
-        const logsRes = await fetch(`/api/deployments/${deploymentId}/logs`);
-
-        const logsData = await logsRes.json();
-
         setLogs(logsData);
 
         if (
           deploymentData.status === "SUCCESS" ||
           deploymentData.status === "FAILED"
         ) {
-          clearInterval(interval);
+          return true;
         }
+
+        return false;
       } catch (error) {
         console.error(error);
+        return false;
       }
-    }, 2000);
+    };
 
-    return () => clearInterval(interval);
+    const poll = async () => {
+      const isFinished = await fetchDeploymentData();
+
+      if (isFinished || stopped) return;
+
+      timeoutId = setTimeout(poll, 2000);
+    };
+
+    let timeoutId: ReturnType<typeof setTimeout>;
+
+    // Fetch immediately.
+    void poll();
+
+    return () => {
+      stopped = true;
+      clearTimeout(timeoutId);
+    };
   }, [deploymentId]);
 
   const isDeploymentActive =
@@ -179,7 +180,7 @@ export default function DeployForm({
   return (
     <div className="mx-auto max-w-5xl">
       {/* User profile */}
-      <div className="mb-8 flex items-center justify-end">
+      <div className="mb-10 flex items-center justify-end">
         {session?.user ? (
           <div className="flex items-center gap-3 rounded-2xl border border-zinc-200 bg-white px-3 py-2 shadow-sm">
             {session.user.image ? (
@@ -187,63 +188,77 @@ export default function DeployForm({
               <img
                 src={session.user.image}
                 alt={session.user.name ?? "GitHub user"}
-                className="h-8 w-8 rounded-full"
+                className="h-9 w-9 rounded-xl border border-zinc-100"
               />
             ) : (
-              <div className="flex h-8 w-8 items-center justify-center rounded-full bg-zinc-100">
+              <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-zinc-100">
                 <GithubIcon className="h-4 w-4" />
               </div>
             )}
 
-            <div className="hidden text-left sm:block">
-              <p className="text-sm font-medium leading-tight">
+            <div className="hidden min-w-0 text-left sm:block">
+              <p className="max-w-[180px] truncate text-sm font-medium leading-tight text-zinc-900">
                 {session.user.name}
               </p>
 
               {session.user.email && (
-                <p className="text-xs text-zinc-500">{session.user.email}</p>
+                <p className="max-w-[180px] truncate text-xs text-zinc-500">
+                  {session.user.email}
+                </p>
               )}
             </div>
+
+            <div className="h-6 w-px bg-zinc-200" />
 
             <button
               type="button"
               onClick={() => signOut()}
-              className="rounded-xl px-3 py-1.5 text-sm text-zinc-600 hover:bg-zinc-100"
+              className="inline-flex cursor-pointer items-center gap-2 rounded-xl px-2.5 py-2 text-sm text-zinc-600 transition hover:bg-zinc-100 hover:text-zinc-900"
             >
-              Sign out
+              <LogOut className="h-4 w-4" />
+              <span className="hidden sm:inline">Sign out</span>
             </button>
           </div>
         ) : null}
       </div>
 
       {/* Hero */}
-      <div className="mb-14 text-center">
+      <div className="mb-14 text-center sm:mb-16">
         <div className="mb-6 flex justify-center">
-          <div className="rounded-2xl border border-zinc-200 bg-white p-4 shadow-lg">
-            <Rocket className="h-8 w-8" />
+          <div className="rounded-2xl border border-zinc-200 bg-white p-4 shadow-lg shadow-zinc-200/50">
+            <Rocket className="h-8 w-8 text-zinc-900" />
           </div>
         </div>
 
-        <h1 className="text-7xl font-bold tracking-tight text-zinc-900">
+        <h1 className="text-5xl font-bold tracking-tight text-zinc-900 sm:text-6xl lg:text-7xl">
           SkyDeploy
         </h1>
 
-        <p className="mx-auto mt-5 max-w-2xl text-xl text-zinc-500">
+        <p className="mx-auto mt-5 max-w-2xl text-base leading-relaxed text-zinc-500 sm:text-xl">
           Deploy Dockerized GitHub repositories with a single click. Watch
           builds, logs, and deployments happen live.
         </p>
       </div>
 
       {!session?.user ? (
-        <div className="rounded-3xl border border-zinc-200 bg-white p-8 text-center shadow-xl shadow-zinc-200/60">
-          <p className="text-zinc-600">
-            Sign in with GitHub to see your repositories and deploy them.
+        <div className="mx-auto max-w-xl rounded-3xl border border-zinc-200 bg-white p-8 text-center shadow-xl shadow-zinc-200/60 sm:p-10">
+          <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-zinc-100">
+            <GithubIcon className="h-6 w-6 text-zinc-700" />
+          </div>
+
+          <h2 className="mt-5 text-lg font-semibold text-zinc-900">
+            Connect your GitHub account
+          </h2>
+
+          <p className="mt-2 text-sm leading-relaxed text-zinc-500">
+            Sign in to view your repositories and deploy projects that contain a
+            Dockerfile.
           </p>
 
           <button
             type="button"
             onClick={() => signIn("github")}
-            className="mt-6 inline-flex items-center justify-center gap-2 rounded-2xl bg-zinc-900 px-6 py-4 font-medium text-white transition hover:bg-zinc-800"
+            className="mt-7 inline-flex cursor-pointer items-center justify-center gap-2 rounded-xl bg-zinc-900 px-5 py-3 text-sm font-medium text-white transition hover:bg-zinc-800 active:scale-[0.98]"
           >
             <GithubIcon className="h-5 w-5" />
             Continue with GitHub
