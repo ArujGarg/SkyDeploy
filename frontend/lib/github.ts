@@ -10,6 +10,7 @@ export type GithubRepo = {
   defaultBranch: string;
   description: string | null;
   updatedAt: string;
+  hasDockerfile: boolean;
 };
 
 export class GithubApiError extends Error {
@@ -45,17 +46,11 @@ export async function getValidGithubAccessToken(userId: string) {
     );
   }
 
-  // Token has no expiry information.
-  // In that case, use the existing token.
   if (!account.expires_at) {
     return account.access_token;
   }
 
-  // expires_at is Unix time in seconds.
-  // Date.now() is milliseconds.
   const expiresAt = account.expires_at * 1000;
-
-  // Refresh one minute before expiry.
   const isExpired = expiresAt <= Date.now() + 60_000;
 
   if (!isExpired) {
@@ -125,6 +120,70 @@ export async function getValidGithubAccessToken(userId: string) {
   return data.access_token;
 }
 
+async function checkDockerfile(
+  repo: {
+    full_name: string;
+    default_branch: string;
+  },
+  accessToken: string,
+): Promise<boolean> {
+  const url = new URL(
+    `https://api.github.com/repos/${repo.full_name}/contents/Dockerfile`,
+  );
+
+  url.searchParams.set("ref", repo.default_branch);
+
+  const response = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      Accept: "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28",
+      "User-Agent": "SkyDeploy",
+    },
+  });
+
+  if (response.status === 200) {
+    return true;
+  }
+
+  if (response.status === 404) {
+    return false;
+  }
+
+  console.error(
+    `Failed to check Dockerfile for ${repo.full_name}: ${response.status}`,
+  );
+
+  return false;
+}
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  mapper: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+
+  async function worker() {
+    while (true) {
+      const currentIndex = nextIndex++;
+
+      if (currentIndex >= items.length) {
+        return;
+      }
+
+      results[currentIndex] = await mapper(items[currentIndex]);
+    }
+  }
+
+  const workerCount = Math.min(concurrency, items.length);
+
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+
+  return results;
+}
+
 export async function fetchGithubRepos(
   accessToken: string,
 ): Promise<GithubRepo[]> {
@@ -134,9 +193,11 @@ export async function fetchGithubRepos(
 
   for (let page = 1; page <= maxPages; page += 1) {
     const url = new URL("https://api.github.com/user/repos");
+
     url.searchParams.set("per_page", String(perPage));
     url.searchParams.set("page", String(page));
     url.searchParams.set("sort", "updated");
+
     url.searchParams.set(
       "affiliation",
       "owner,collaborator,organization_member",
@@ -161,6 +222,7 @@ export async function fetchGithubRepos(
 
     if (response.status === 403) {
       const remaining = response.headers.get("x-ratelimit-remaining");
+
       if (remaining === "0") {
         throw new GithubApiError(
           "GitHub API rate limit exceeded. Please try again later.",
@@ -196,19 +258,28 @@ export async function fetchGithubRepos(
       updated_at: string;
     }>;
 
-    for (const repo of pageRepos) {
-      repos.push({
-        id: repo.id,
-        name: repo.name,
-        fullName: repo.full_name,
-        htmlUrl: repo.html_url,
-        cloneUrl: repo.clone_url,
-        private: repo.private,
-        defaultBranch: repo.default_branch,
-        description: repo.description,
-        updatedAt: repo.updated_at,
-      });
-    }
+    const reposWithDockerStatus = await mapWithConcurrency(
+      pageRepos,
+      5,
+      async (repo) => {
+        const hasDockerfile = await checkDockerfile(repo, accessToken);
+
+        return {
+          id: repo.id,
+          name: repo.name,
+          fullName: repo.full_name,
+          htmlUrl: repo.html_url,
+          cloneUrl: repo.clone_url,
+          private: repo.private,
+          defaultBranch: repo.default_branch,
+          description: repo.description,
+          updatedAt: repo.updated_at,
+          hasDockerfile,
+        };
+      },
+    );
+
+    repos.push(...reposWithDockerStatus);
 
     if (pageRepos.length < perPage) {
       break;
