@@ -6,16 +6,21 @@ const execAsync = promisify(exec);
 
 export async function createNginxConfig(subdomain: string, hostPort: number) {
   const config = `
-  server {
-      listen 80;
+    server {
+        listen 80;
 
-      server_name _;
+        server_name ${subdomain}.aruj.dev;
 
-      location / {
-          proxy_pass http://127.0.0.1:${hostPort};
-      }
-  }
-  `;
+        location / {
+            proxy_pass http://127.0.0.1:${hostPort};
+
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+        }
+    }
+    `;
 
   await fs.writeFile(
     `${process.env.NGINX_CONFIG_DIR}/${subdomain}.conf`,

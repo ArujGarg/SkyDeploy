@@ -212,7 +212,7 @@ async function startWorker() {
           containerId,
           hostPort,
           subdomain,
-          deployedUrl: `http://${subdomain}.localhost`,
+          deployedUrl: `http://${subdomain}.aruj.dev`,
         },
       });
 
@@ -221,7 +221,7 @@ async function startWorker() {
       await addDeploymentLog(
         deploymentId,
         "NGINX",
-        `Created nginx route ${subdomain}.localhost`,
+        `Created nginx route ${subdomain}.aruj.dev`,
       );
 
       await reloadNginx();
@@ -231,7 +231,7 @@ async function startWorker() {
       await addDeploymentLog(
         deploymentId,
         "SUCCESS",
-        `Deployment available at http://${subdomain}.localhost`,
+        `Deployment available at http://${subdomain}.aruj.dev`,
       );
 
       await prisma.deployment.update({
@@ -243,7 +243,7 @@ async function startWorker() {
           imageTag,
           containerId,
           hostPort,
-          deployedUrl: `http://${subdomain}.localhost`,
+          deployedUrl: `http://${subdomain}.aruj.dev`,
         },
       });
 
