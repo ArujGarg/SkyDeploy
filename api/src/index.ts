@@ -48,6 +48,8 @@ app.get("/api/deployments/:id", async (req, res) => {
 });
 
 app.post("/api/deployments", async (req, res) => {
+  let deploymentId: string | null = null;
+
   try {
     if (!authenticateInternalRequest(req)) {
       return res.status(403).json({
@@ -107,14 +109,37 @@ app.post("/api/deployments", async (req, res) => {
       },
     });
 
+    deploymentId = deployment.id;
+
+    // IMPORTANT: only return success after the job was actually queued.
     await enqueueDeployment(deployment.id);
 
-    res.status(201).json(deployment);
+    return res.status(201).json(deployment);
   } catch (error) {
-    console.error(error);
+    console.error("Failed to create or enqueue deployment:", error);
 
-    res.status(500).json({
-      message: "Failed to create deployment",
+    // If we created the deployment but failed to put it in Redis,
+    // don't leave it stuck in QUEUED forever.
+    if (deploymentId) {
+      try {
+        await prisma.deployment.update({
+          where: {
+            id: deploymentId,
+          },
+          data: {
+            status: "FAILED",
+            completedAt: new Date(),
+            errorMessage:
+              "Failed to queue deployment. The deployment service may be temporarily unavailable.",
+          },
+        });
+      } catch (updateError) {
+        console.error("Failed to mark deployment as FAILED:", updateError);
+      }
+    }
+
+    return res.status(500).json({
+      message: "Failed to start deployment. Please try again.",
     });
   }
 });
