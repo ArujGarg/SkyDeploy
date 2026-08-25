@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   CheckCircle2,
   ChevronDown,
@@ -79,13 +79,12 @@ function formatDate(dateString: string) {
   }).format(date);
 }
 
-function formatDuration(deployment: DeploymentHistory) {
-  if (!deployment.completedAt) {
-    return null;
-  }
-
+function formatDuration(deployment: DeploymentHistory, now: number) {
   const start = new Date(deployment.createdAt).getTime();
-  const end = new Date(deployment.completedAt).getTime();
+
+  const end = deployment.completedAt
+    ? new Date(deployment.completedAt).getTime()
+    : now;
 
   const totalSeconds = Math.max(0, Math.floor((end - start) / 1000));
 
@@ -128,15 +127,27 @@ function StatusIcon({ status }: { status: DeploymentStatus }) {
 
 function DeploymentRow({ deployment }: { deployment: DeploymentHistory }) {
   const [expanded, setExpanded] = useState(false);
-
+  const [now, setNow] = useState(() => Date.now());
   const [logsVisible, setLogsVisible] = useState(false);
   const [logs, setLogs] = useState<DeploymentLog[]>([]);
   const [logsLoading, setLogsLoading] = useState(false);
   const [logsError, setLogsError] = useState<string | null>(null);
   const [logsFetched, setLogsFetched] = useState(false);
 
+  useEffect(() => {
+    if (deployment.completedAt) {
+      return;
+    }
+
+    const interval = setInterval(() => {
+      setNow(Date.now());
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [deployment.completedAt]);
+
   const status = statusStyles[deployment.status];
-  const duration = formatDuration(deployment);
+  const duration = formatDuration(deployment, now);
 
   async function toggleLogs() {
     if (logsVisible) {
@@ -203,12 +214,10 @@ function DeploymentRow({ deployment }: { deployment: DeploymentHistory }) {
           <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-zinc-500">
             <span>{formatDate(deployment.createdAt)}</span>
 
-            {duration && (
-              <span className="inline-flex items-center gap-1">
-                <Clock3 className="h-3 w-3" />
-                {duration}
-              </span>
-            )}
+            <span className="inline-flex items-center gap-1">
+              <Clock3 className="h-3 w-3" />
+              {deployment.completedAt ? duration : `Running for ${duration}`}
+            </span>
           </div>
         </div>
 
