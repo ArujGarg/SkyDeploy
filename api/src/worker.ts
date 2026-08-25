@@ -54,6 +54,13 @@ async function startWorker() {
         where: {
           id: deploymentId,
         },
+        include: {
+          project: {
+            select: {
+              userId: true,
+            },
+          },
+        },
       });
 
       if (!deployment) {
@@ -79,21 +86,17 @@ async function startWorker() {
         `Cloning repository ${deployment.githubRepoUrl}`,
       );
 
-      let accessToken: string | null = null;
+      const githubAccount = await prisma.account.findFirst({
+        where: {
+          userId: deployment.project.userId,
+          provider: "github",
+        },
+        select: {
+          access_token: true,
+        },
+      });
 
-      if (deployment.userId) {
-        const githubAccount = await prisma.account.findFirst({
-          where: {
-            userId: deployment.userId,
-            provider: "github",
-          },
-          select: {
-            access_token: true,
-          },
-        });
-
-        accessToken = githubAccount?.access_token ?? null;
-      }
+      const accessToken = githubAccount?.access_token ?? null;
 
       const targetDir = await cloneRepository(
         deployment.githubRepoUrl,
@@ -244,6 +247,7 @@ async function startWorker() {
           containerId,
           hostPort,
           deployedUrl: `http://${subdomain}.aruj.dev`,
+          completedAt: new Date(),
         },
       });
 
@@ -291,6 +295,7 @@ async function startWorker() {
           status: "FAILED",
           errorMessage:
             error instanceof Error ? error.message : "Unknown error",
+          completedAt: new Date(),
         },
       });
     } finally {

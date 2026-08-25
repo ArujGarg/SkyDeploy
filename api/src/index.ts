@@ -72,12 +72,38 @@ app.post("/api/deployments", async (req, res) => {
       });
     }
 
+    const deploymentBranch =
+      typeof branch === "string" && branch ? branch : "main";
+
+    const repoName = githubRepoUrl
+      .replace(/\.git$/, "")
+      .split("/")
+      .pop();
+
+    const project = await prisma.project.upsert({
+      where: {
+        userId_githubRepoUrl: {
+          userId,
+          githubRepoUrl,
+        },
+      },
+      update: {
+        branch: deploymentBranch,
+      },
+      create: {
+        name: repoName || "Untitled Project",
+        githubRepoUrl,
+        branch: deploymentBranch,
+        userId,
+      },
+    });
+
     const deployment = await prisma.deployment.create({
       data: {
         githubRepoUrl,
-        branch: typeof branch === "string" && branch ? branch : "main",
+        branch: deploymentBranch,
         status: "QUEUED",
-        userId,
+        projectId: project.id,
       },
     });
 
@@ -110,6 +136,48 @@ app.get("/api/deployments/:id/logs", async (req, res) => {
   });
 
   res.status(200).json(logs);
+});
+
+app.get("/api/projects", async (req, res) => {
+  try {
+    if (!authenticateInternalRequest(req)) {
+      return res.status(403).json({
+        message: "Invalid internal API credentials",
+      });
+    }
+
+    const userId = req.query.userId;
+
+    if (typeof userId !== "string" || !userId) {
+      return res.status(400).json({
+        message: "Authenticated user ID is required",
+      });
+    }
+
+    const projects = await prisma.project.findMany({
+      where: {
+        userId,
+      },
+      include: {
+        deployments: {
+          orderBy: {
+            createdAt: "desc",
+          },
+        },
+      },
+      orderBy: {
+        updatedAt: "desc",
+      },
+    });
+
+    return res.json({ projects });
+  } catch (error) {
+    console.error(error);
+
+    return res.status(500).json({
+      message: "Failed to fetch projects",
+    });
+  }
 });
 
 await connectRedis();

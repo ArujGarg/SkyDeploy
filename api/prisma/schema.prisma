@@ -34,7 +34,20 @@ model User {
   image         String?
   accounts      Account[]
   sessions      Session[]
+  projects      Project[]
+}
+
+model Project {
+  id            String       @id @default(cuid())
+  name          String
+  githubRepoUrl String
+  branch        String       @default("main")
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+  userId        String
+  user          User         @relation(fields: [userId], references: [id], onDelete: Cascade)
   deployments   Deployment[]
+  @@unique([userId, githubRepoUrl])
 }
 
 model Account {
@@ -50,9 +63,7 @@ model Account {
   scope             String?
   id_token          String?
   session_state     String?
-
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
   @@unique([provider, providerAccountId])
 }
 
@@ -68,7 +79,6 @@ model VerificationToken {
   identifier String
   token      String
   expires    DateTime
-
   @@unique([identifier, token])
 }
 
@@ -85,10 +95,11 @@ model Deployment {
   errorMessage  String?
   createdAt     DateTime         @default(now())
   updatedAt     DateTime         @updatedAt
+  completedAt   DateTime?
   logs          DeploymentLog[]
   subdomain     String?          @unique
-  userId        String?
-  user          User?            @relation(fields: [userId], references: [id], onDelete: SetNull)
+  projectId     String
+  project       Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
 }
 
 model DeploymentLog {
