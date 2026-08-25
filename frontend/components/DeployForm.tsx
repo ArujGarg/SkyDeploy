@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { signIn, signOut } from "next-auth/react";
-import { LogOut, Rocket } from "lucide-react";
+import { signIn } from "next-auth/react";
+import { Rocket } from "lucide-react";
 import type { Session } from "next-auth";
 import { GithubIcon } from "./icons/Github";
 import { RepositoryList } from "./RepositoryList";
@@ -179,49 +179,6 @@ export default function DeployForm({
 
   return (
     <div className="mx-auto max-w-5xl">
-      {/* User profile */}
-      <div className="mb-10 flex items-center justify-end">
-        {session?.user ? (
-          <div className="flex items-center gap-3 rounded-2xl border border-zinc-200 bg-white px-3 py-2 shadow-sm">
-            {session.user.image ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={session.user.image}
-                alt={session.user.name ?? "GitHub user"}
-                className="h-9 w-9 rounded-xl border border-zinc-100"
-              />
-            ) : (
-              <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-zinc-100">
-                <GithubIcon className="h-4 w-4" />
-              </div>
-            )}
-
-            <div className="hidden min-w-0 text-left sm:block">
-              <p className="max-w-[180px] truncate text-sm font-medium leading-tight text-zinc-900">
-                {session.user.name}
-              </p>
-
-              {session.user.email && (
-                <p className="max-w-[180px] truncate text-xs text-zinc-500">
-                  {session.user.email}
-                </p>
-              )}
-            </div>
-
-            <div className="h-6 w-px bg-zinc-200" />
-
-            <button
-              type="button"
-              onClick={() => signOut()}
-              className="inline-flex cursor-pointer items-center gap-2 rounded-xl px-2.5 py-2 text-sm text-zinc-600 transition hover:bg-zinc-100 hover:text-zinc-900"
-            >
-              <LogOut className="h-4 w-4" />
-              <span className="hidden sm:inline">Sign out</span>
-            </button>
-          </div>
-        ) : null}
-      </div>
-
       {/* Hero */}
       <div className="mb-14 text-center sm:mb-16">
         <div className="mb-6 flex justify-center">

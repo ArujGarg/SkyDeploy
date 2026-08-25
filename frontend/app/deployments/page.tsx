@@ -111,15 +111,23 @@ export default function DeploymentsPage() {
         <div className="flex items-center justify-between">
           <Link
             href="/"
-            className="inline-flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium text-zinc-600 transition hover:bg-zinc-200 hover:text-zinc-900"
+            className="inline-flex items-center gap-2 rounded-xl border border-zinc-200 bg-white px-4 py-2.5 text-sm font-medium text-zinc-700 shadow-sm transition hover:border-zinc-300 hover:bg-zinc-50 hover:text-zinc-900"
           >
             <ArrowLeft className="h-4 w-4" />
             Back to deploy
           </Link>
 
-          <div className="flex items-center gap-2 text-sm text-zinc-500">
-            <Rocket className="h-4 w-4" />
-            SkyDeploy
+          <div className="inline-flex items-center gap-2.5">
+            <div className="flex justify-center">
+              <div className="rounded-2xl border border-zinc-200 bg-white p-4 shadow-lg shadow-zinc-200/50">
+                <Rocket className="h-4 w-4 text-zinc-900" />
+              </div>
+            </div>
+            <div className="flex flex-col leading-tight">
+              <span className="text-sm font-semibold tracking-tight text-zinc-900">
+                SkyDeploy
+              </span>
+            </div>
           </div>
         </div>
 
