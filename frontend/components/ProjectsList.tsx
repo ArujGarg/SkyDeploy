@@ -159,111 +159,90 @@ function DeploymentRow({
     }
   }, [shouldAutoOpen]);
 
+  async function fetchLogs(showLoading = false) {
+    try {
+      if (showLoading) {
+        setLogsLoading(true);
+      }
+
+      setLogsError(null);
+
+      const response = await fetch(`/api/deployments/${deployment.id}/logs`, {
+        cache: "no-store",
+      });
+
+      const data: unknown = await response.json();
+
+      if (!response.ok) {
+        const errorMessage =
+          typeof data === "object" &&
+          data !== null &&
+          "message" in data &&
+          typeof data.message === "string"
+            ? data.message
+            : "Failed to load deployment logs.";
+
+        throw new Error(errorMessage);
+      }
+
+      const fetchedLogs = data as DeploymentLog[];
+
+      setLogs((currentLogs) => {
+        const existingLogs = new Set(
+          currentLogs.map(
+            (log) => `${log.createdAt}-${log.stage}-${log.message}`,
+          ),
+        );
+
+        const newLogs = fetchedLogs.filter(
+          (log) =>
+            !existingLogs.has(`${log.createdAt}-${log.stage}-${log.message}`),
+        );
+
+        if (newLogs.length === 0) {
+          return currentLogs;
+        }
+
+        return [...currentLogs, ...newLogs];
+      });
+    } catch (error) {
+      setLogsError(
+        error instanceof Error
+          ? error.message
+          : "Failed to load deployment logs.",
+      );
+    } finally {
+      if (showLoading) {
+        setLogsLoading(false);
+      }
+    }
+  }
+
   useEffect(() => {
     if (!logsVisible) {
       return;
     }
 
-    let stopped = false;
+    // First fetch when logs are opened.
+    void fetchLogs(logs.length === 0);
 
-    async function loadLogs() {
-      try {
-        setLogsLoading(true);
-        setLogsError(null);
-
-        const response = await fetch(`/api/deployments/${deployment.id}/logs`, {
-          cache: "no-store",
-        });
-
-        const data = await response.json();
-
-        if (!response.ok) {
-          throw new Error(data.message || "Failed to load deployment logs.");
-        }
-
-        if (stopped) return;
-
-        setLogs(data);
-      } catch (error) {
-        if (stopped) return;
-
-        setLogsError(
-          error instanceof Error
-            ? error.message
-            : "Failed to load deployment logs.",
-        );
-      } finally {
-        if (!stopped) {
-          setLogsLoading(false);
-        }
-      }
-    }
-
-    // Fetch immediately.
-    void loadLogs();
-
-    // Keep polling logs while deployment is active.
-    const isDeploymentActive =
+    const isActive =
       deployment.status !== "SUCCESS" && deployment.status !== "FAILED";
 
-    if (!isDeploymentActive) {
-      return () => {
-        stopped = true;
-      };
+    if (!isActive) {
+      return;
     }
 
+    // Poll silently. Existing logs stay on screen and only new logs are added.
     const interval = setInterval(() => {
-      void loadLogs();
+      void fetchLogs(false);
     }, 2000);
 
-    return () => {
-      stopped = true;
-      clearInterval(interval);
-    };
+    return () => clearInterval(interval);
   }, [deployment.id, deployment.status, logsVisible]);
 
   const status = statusStyles[deployment.status];
   const duration = formatDuration(deployment, now);
-
-  //   async function toggleLogs() {
-  //     if (logsVisible) {
-  //       setLogsVisible(false);
-  //       return;
-  //     }
-
-  //     setLogsVisible(true);
-
-  //     // Don't fetch again if we already fetched these logs.
-  //     if (logsFetched) {
-  //       return;
-  //     }
-
-  //     try {
-  //       setLogsLoading(true);
-  //       setLogsError(null);
-
-  //       const response = await fetch(`/api/deployments/${deployment.id}/logs`, {
-  //         cache: "no-store",
-  //       });
-
-  //       const data = await response.json();
-
-  //       if (!response.ok) {
-  //         throw new Error(data.message || "Failed to load deployment logs.");
-  //       }
-
-  //       setLogs(data);
-  //       setLogsFetched(true);
-  //     } catch (error) {
-  //       setLogsError(
-  //         error instanceof Error
-  //           ? error.message
-  //           : "Failed to load deployment logs.",
-  //       );
-  //     } finally {
-  //       setLogsLoading(false);
-  //     }
-  //   }
 
   function toggleLogs() {
     setLogsVisible((current) => !current);
@@ -383,7 +362,7 @@ function DeploymentRow({
                 </div>
 
                 <div className="max-h-[400px] space-y-2 overflow-y-auto p-4 font-mono text-xs">
-                  {logsLoading && (
+                  {logsLoading && logs.length === 0 && (
                     <div className="flex items-center gap-2 text-zinc-500">
                       <Loader2 className="h-4 w-4 animate-spin" />
                       Fetching logs...
@@ -400,24 +379,20 @@ function DeploymentRow({
                     <p className="text-zinc-500">No logs were recorded.</p>
                   )}
 
-                  {!logsLoading &&
-                    !logsError &&
-                    logs.map((log, index) => (
-                      <div
-                        key={`${log.createdAt}-${index}`}
-                        className="break-words text-zinc-300"
-                      >
-                        <span className="mr-2 text-zinc-600">
-                          {formatLogTime(log.createdAt)}
-                        </span>
+                  {logs.map((log, index) => (
+                    <div
+                      key={`${log.createdAt}-${log.stage}-${log.message}-${index}`}
+                      className="break-words text-zinc-300"
+                    >
+                      <span className="mr-2 text-zinc-600">
+                        {formatLogTime(log.createdAt)}
+                      </span>
 
-                        <span className="mr-2 text-blue-400">
-                          [{log.stage}]
-                        </span>
+                      <span className="mr-2 text-blue-400">[{log.stage}]</span>
 
-                        {log.message}
-                      </div>
-                    ))}
+                      {log.message}
+                    </div>
+                  ))}
                 </div>
               </div>
             )}
