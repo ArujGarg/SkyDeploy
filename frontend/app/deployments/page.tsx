@@ -37,9 +37,16 @@ export default function DeploymentsPage() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
   const [redeployingProjectId, setRedeployingProjectId] = useState<
     string | null
   >(null);
+
+  // The deployment that was just created via Redeploy.
+  // We use this to automatically open it.
+  const [activeDeploymentId, setActiveDeploymentId] = useState<string | null>(
+    null,
+  );
 
   async function redeployProject(project: Project) {
     try {
@@ -63,8 +70,12 @@ export default function DeploymentsPage() {
         throw new Error(data.message || "Failed to start redeployment.");
       }
 
-      // Reload so the new QUEUED deployment appears.
-      await loadProjects();
+      // Remember the newly created deployment.
+      // ProjectsList will automatically open this deployment.
+      setActiveDeploymentId(data.id);
+
+      // Reload so the new deployment appears.
+      await loadProjects(false);
     } catch (error) {
       setError(
         error instanceof Error
@@ -76,9 +87,12 @@ export default function DeploymentsPage() {
     }
   }
 
-  async function loadProjects() {
+  async function loadProjects(showLoading = true) {
     try {
-      setLoading(true);
+      if (showLoading) {
+        setLoading(true);
+      }
+
       setError(null);
 
       const response = await fetch("/api/projects", {
@@ -97,13 +111,37 @@ export default function DeploymentsPage() {
         error instanceof Error ? error.message : "Failed to load projects.",
       );
     } finally {
-      setLoading(false);
+      if (showLoading) {
+        setLoading(false);
+      }
     }
   }
 
+  // Initial load.
   useEffect(() => {
     void loadProjects();
   }, []);
+
+  // Check whether anything is currently deploying.
+  const hasActiveDeployment = projects.some((project) =>
+    project.deployments.some(
+      (deployment) =>
+        deployment.status !== "SUCCESS" && deployment.status !== "FAILED",
+    ),
+  );
+
+  // Poll while at least one deployment is active.
+  useEffect(() => {
+    if (!hasActiveDeployment) {
+      return;
+    }
+
+    const interval = setInterval(() => {
+      void loadProjects(false);
+    }, 2000);
+
+    return () => clearInterval(interval);
+  }, [hasActiveDeployment]);
 
   return (
     <main className="min-h-screen bg-zinc-50 px-6 py-8">
@@ -123,6 +161,7 @@ export default function DeploymentsPage() {
                 <Rocket className="h-4 w-4 text-zinc-900" />
               </div>
             </div>
+
             <div className="flex flex-col leading-tight">
               <span className="text-sm font-semibold tracking-tight text-zinc-900">
                 SkyDeploy
@@ -169,6 +208,7 @@ export default function DeploymentsPage() {
             projects={projects}
             onRedeploy={redeployProject}
             redeployingProjectId={redeployingProjectId}
+            activeDeploymentId={activeDeploymentId}
           />
         )}
       </div>
