@@ -6,6 +6,7 @@ import {
   ChevronDown,
   ChevronUp,
   CircleAlert,
+  Clock3,
   ExternalLink,
   Loader2,
 } from "lucide-react";
@@ -21,6 +22,8 @@ export type Deployment = {
     | "FAILED";
   deployedUrl: string | null;
   errorMessage: string | null;
+  createdAt: string;
+  completedAt: string | null;
 };
 
 export type DeploymentLog = {
@@ -43,8 +46,46 @@ const statusColors = {
   FAILED: "border-red-200 bg-red-50 text-red-700",
 };
 
+function formatDuration(
+  createdAt: string,
+  completedAt: string | null,
+  now: number,
+) {
+  const start = new Date(createdAt).getTime();
+
+  const end = completedAt ? new Date(completedAt).getTime() : now;
+
+  const totalSeconds = Math.max(0, Math.floor((end - start) / 1000));
+
+  if (totalSeconds < 60) {
+    return `${totalSeconds}s`;
+  }
+
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+
+  if (minutes < 60) {
+    return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`;
+  }
+
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+
+  return `${hours}h ${remainingMinutes}m`;
+}
+
+function formatLogTime(dateString: string) {
+  return new Intl.DateTimeFormat(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+  }).format(new Date(dateString));
+}
+
 export function DeploymentPanel({ deployment, logs }: DeploymentPanelProps) {
   const [logsExpanded, setLogsExpanded] = useState(true);
+  const [now, setNow] = useState(() => Date.now());
+
   const logsContainerRef = useRef<HTMLDivElement | null>(null);
   const shouldAutoScrollRef = useRef(true);
 
@@ -52,6 +93,18 @@ export function DeploymentPanel({ deployment, logs }: DeploymentPanelProps) {
 
   const isActive =
     deployment.status !== "SUCCESS" && deployment.status !== "FAILED";
+
+  useEffect(() => {
+    if (!isActive) {
+      return;
+    }
+
+    const interval = setInterval(() => {
+      setNow(Date.now());
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [isActive]);
 
   useEffect(() => {
     const container = logsContainerRef.current;
@@ -78,6 +131,12 @@ export function DeploymentPanel({ deployment, logs }: DeploymentPanelProps) {
     setLogsExpanded((previous) => !previous);
   }
 
+  const duration = formatDuration(
+    deployment.createdAt,
+    deployment.completedAt,
+    now,
+  );
+
   return (
     <div className="border-t border-zinc-200 bg-white px-5 py-5">
       {/* Status */}
@@ -100,11 +159,18 @@ export function DeploymentPanel({ deployment, logs }: DeploymentPanelProps) {
                   : "Deployment in progress"}
             </p>
 
-            <p className="mt-0.5 text-sm text-zinc-500">
-              {isActive
-                ? "SkyDeploy is building and starting your application."
-                : `Deployment ${deployment.id}`}
-            </p>
+            <div className="mt-0.5 flex items-center gap-3 text-sm text-zinc-500">
+              <span>
+                {isActive
+                  ? "SkyDeploy is building and starting your application."
+                  : `Deployment ${deployment.id}`}
+              </span>
+
+              <span className="inline-flex shrink-0 items-center gap-1">
+                <Clock3 className="h-3.5 w-3.5" />
+                {isActive ? `Running for ${duration}` : duration}
+              </span>
+            </div>
           </div>
         </div>
 
@@ -213,9 +279,13 @@ export function DeploymentPanel({ deployment, logs }: DeploymentPanelProps) {
             ) : (
               logs.map((log, index) => (
                 <div
-                  key={`${log.createdAt}-${index}`}
+                  key={`${log.createdAt}-${log.stage}-${log.message}-${index}`}
                   className="break-words text-zinc-300"
                 >
+                  <span className="mr-2 text-zinc-600">
+                    {formatLogTime(log.createdAt)}
+                  </span>
+
                   <span className="mr-2 text-blue-400">[{log.stage}]</span>
 
                   <span>{log.message}</span>

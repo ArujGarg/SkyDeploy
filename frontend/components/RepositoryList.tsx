@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import {
   CheckCircle2,
   CircleAlert,
@@ -30,6 +31,27 @@ type RepositoryListProps = {
   deploymentRepoUrl: string | null;
 };
 
+function formatDuration(createdAt: string, now: number) {
+  const start = new Date(createdAt).getTime();
+  const totalSeconds = Math.max(0, Math.floor((now - start) / 1000));
+
+  if (totalSeconds < 60) {
+    return `${totalSeconds}s`;
+  }
+
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+
+  if (minutes < 60) {
+    return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`;
+  }
+
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+
+  return `${hours}h ${remainingMinutes}m`;
+}
+
 export function RepositoryList({
   repos,
   loading,
@@ -44,6 +66,25 @@ export function RepositoryList({
   logs,
   deploymentRepoUrl,
 }: RepositoryListProps) {
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    const isActive =
+      deployment &&
+      deployment.status !== "SUCCESS" &&
+      deployment.status !== "FAILED";
+
+    if (!isActive) {
+      return;
+    }
+
+    const interval = setInterval(() => {
+      setNow(Date.now());
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [deployment?.status]);
+
   const query = search.trim().toLowerCase();
 
   const filteredRepos = repos.filter((repo) => {
@@ -201,7 +242,9 @@ export function RepositoryList({
                     {isDeployingThis ? (
                       <>
                         <Loader2 className="h-4 w-4 animate-spin" />
-                        Deploying...
+                        {deployment && deploymentRepoUrl === repo.cloneUrl
+                          ? `Deploying • ${formatDuration(deployment.createdAt, now)}`
+                          : "Deploying..."}
                       </>
                     ) : !isSupported ? (
                       <>
