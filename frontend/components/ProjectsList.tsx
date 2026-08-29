@@ -326,7 +326,7 @@ function DeploymentRow({
                 </p>
 
                 <p className="mt-2 text-sm text-red-700">
-                  {deployment.errorMessage}
+                  Please check the deployment logs for details.
                 </p>
               </div>
             )}
