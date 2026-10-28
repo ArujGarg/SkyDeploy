@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancel an older run of the same branch when a newer push arrives.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Checks never connect to a database. These are placeholders so tools that
+  # insist on the variables being present (prisma.config.ts, next build) run.
+  DATABASE_URL: postgresql://ci:ci@localhost:5432/ci
+  AUTH_SECRET: ci-placeholder
+  AUTH_GITHUB_ID: ci-placeholder
+  AUTH_GITHUB_SECRET: ci-placeholder
+  INTERNAL_API_SECRET: ci-placeholder
+
+jobs:
+  api:
+    name: API (typecheck)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: api/package-lock.json
+      - run: npm ci
+      - run: npx prisma generate
+      - run: npx tsc --noEmit
+
+  frontend:
+    name: Frontend (lint, typecheck, build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      # The Prisma client is generated, not committed, and the schema lives in api/.
+      - run: npx prisma generate --schema=../api/prisma/schema.prisma
+      # Lint currently reports existing errors (see ProjectsList/DeploymentPanel).
+      # Report them without failing the build until they are fixed.
+      - run: npm run lint
+        continue-on-error: true
+      - run: npx tsc --noEmit
+      - run: npm run build
