@@ -89,10 +89,12 @@ export function DeploymentPanel({ deployment, logs }: DeploymentPanelProps) {
   const logsContainerRef = useRef<HTMLDivElement | null>(null);
   const shouldAutoScrollRef = useRef(true);
 
-  if (!deployment) return null;
-
+  // Hooks must run on every render, so the `!deployment` early return lives
+  // below them and isActive tolerates a missing deployment.
   const isActive =
-    deployment.status !== "SUCCESS" && deployment.status !== "FAILED";
+    deployment !== null &&
+    deployment.status !== "SUCCESS" &&
+    deployment.status !== "FAILED";
 
   useEffect(() => {
     if (!isActive) {
@@ -130,6 +132,8 @@ export function DeploymentPanel({ deployment, logs }: DeploymentPanelProps) {
   function toggleLogs() {
     setLogsExpanded((previous) => !previous);
   }
+
+  if (!deployment) return null;
 
   const duration = formatDuration(
     deployment.createdAt,

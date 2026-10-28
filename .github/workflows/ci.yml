@@ -53,9 +53,6 @@ jobs:
       - run: npm ci
       # The Prisma client is generated, not committed, and the schema lives in api/.
       - run: npx prisma generate --schema=../api/prisma/schema.prisma
-      # Lint currently reports existing errors (see ProjectsList/DeploymentPanel).
-      # Report them without failing the build until they are fixed.
       - run: npm run lint
-        continue-on-error: true
       - run: npx tsc --noEmit
       - run: npm run build

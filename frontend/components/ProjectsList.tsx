@@ -133,12 +133,27 @@ function DeploymentRow({
   deployment: DeploymentHistory;
   shouldAutoOpen: boolean;
 }) {
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(shouldAutoOpen);
   const [now, setNow] = useState(() => Date.now());
-  const [logsVisible, setLogsVisible] = useState(false);
+  const [logsVisible, setLogsVisible] = useState(shouldAutoOpen);
   const [logs, setLogs] = useState<DeploymentLog[]>([]);
-  const [logsLoading, setLogsLoading] = useState(false);
+  const [logsLoaded, setLogsLoaded] = useState(false);
   const [logsError, setLogsError] = useState<string | null>(null);
+  const [prevShouldAutoOpen, setPrevShouldAutoOpen] = useState(shouldAutoOpen);
+
+  // Open the row when it becomes the active deployment. State is adjusted
+  // during render (not in an effect) so React doesn't render twice.
+  if (shouldAutoOpen !== prevShouldAutoOpen) {
+    setPrevShouldAutoOpen(shouldAutoOpen);
+
+    if (shouldAutoOpen) {
+      setExpanded(true);
+      setLogsVisible(true);
+    }
+  }
+
+  // Only the very first fetch shows a loading state.
+  const logsLoading = logsVisible && !logsLoaded;
 
   useEffect(() => {
     if (deployment.completedAt) {
@@ -153,78 +168,64 @@ function DeploymentRow({
   }, [deployment.completedAt]);
 
   useEffect(() => {
-    if (shouldAutoOpen) {
-      setExpanded(true);
-      setLogsVisible(true);
-    }
-  }, [shouldAutoOpen]);
-
-  async function fetchLogs(showLoading = false) {
-    try {
-      if (showLoading) {
-        setLogsLoading(true);
-      }
-
-      setLogsError(null);
-
-      const response = await fetch(`/api/deployments/${deployment.id}/logs`, {
-        cache: "no-store",
-      });
-
-      const data: unknown = await response.json();
-
-      if (!response.ok) {
-        const errorMessage =
-          typeof data === "object" &&
-          data !== null &&
-          "message" in data &&
-          typeof data.message === "string"
-            ? data.message
-            : "Failed to load deployment logs.";
-
-        throw new Error(errorMessage);
-      }
-
-      const fetchedLogs = data as DeploymentLog[];
-
-      setLogs((currentLogs) => {
-        const existingLogs = new Set(
-          currentLogs.map(
-            (log) => `${log.createdAt}-${log.stage}-${log.message}`,
-          ),
-        );
-
-        const newLogs = fetchedLogs.filter(
-          (log) =>
-            !existingLogs.has(`${log.createdAt}-${log.stage}-${log.message}`),
-        );
-
-        if (newLogs.length === 0) {
-          return currentLogs;
-        }
-
-        return [...currentLogs, ...newLogs];
-      });
-    } catch (error) {
-      setLogsError(
-        error instanceof Error
-          ? error.message
-          : "Failed to load deployment logs.",
-      );
-    } finally {
-      if (showLoading) {
-        setLogsLoading(false);
-      }
-    }
-  }
-
-  useEffect(() => {
     if (!logsVisible) {
       return;
     }
 
+    async function fetchLogs() {
+      try {
+        const response = await fetch(`/api/deployments/${deployment.id}/logs`, {
+          cache: "no-store",
+        });
+
+        const data: unknown = await response.json();
+
+        if (!response.ok) {
+          const errorMessage =
+            typeof data === "object" &&
+            data !== null &&
+            "message" in data &&
+            typeof data.message === "string"
+              ? data.message
+              : "Failed to load deployment logs.";
+
+          throw new Error(errorMessage);
+        }
+
+        const fetchedLogs = data as DeploymentLog[];
+
+        setLogsError(null);
+        setLogs((currentLogs) => {
+          const existingLogs = new Set(
+            currentLogs.map(
+              (log) => `${log.createdAt}-${log.stage}-${log.message}`,
+            ),
+          );
+
+          const newLogs = fetchedLogs.filter(
+            (log) =>
+              !existingLogs.has(`${log.createdAt}-${log.stage}-${log.message}`),
+          );
+
+          if (newLogs.length === 0) {
+            return currentLogs;
+          }
+
+          return [...currentLogs, ...newLogs];
+        });
+      } catch (error) {
+        setLogsError(
+          error instanceof Error
+            ? error.message
+            : "Failed to load deployment logs.",
+        );
+      } finally {
+        setLogsLoaded(true);
+      }
+    }
+
     // First fetch when logs are opened.
-    void fetchLogs(logs.length === 0);
+    void fetchLogs();
 
     const isActive =
       deployment.status !== "SUCCESS" && deployment.status !== "FAILED";
@@ -235,7 +236,7 @@ function DeploymentRow({
 
     // Poll silently. Existing logs stay on screen and only new logs are added.
     const interval = setInterval(() => {
-      void fetchLogs(false);
+      void fetchLogs();
     }, 2000);
 
     return () => clearInterval(interval);
@@ -413,11 +414,14 @@ export function ProjectsList({
     projects.length === 1 ? (projects[0]?.id ?? null) : null,
   );
 
-  useEffect(() => {
-    if (!activeDeploymentId) {
-      return;
-    }
+  const [handledActiveDeploymentId, setHandledActiveDeploymentId] = useState<
+    string | null
+  >(null);
 
+  // Expand the project that owns the active deployment, once per deployment.
+  // The project may only show up after the next projects refresh, so keep
+  // looking until it is found. Adjusted during render instead of in an effect.
+  if (activeDeploymentId && activeDeploymentId !== handledActiveDeploymentId) {
     const project = projects.find((project) =>
       project.deployments.some(
         (deployment) => deployment.id === activeDeploymentId,
@@ -425,9 +429,10 @@ export function ProjectsList({
     );
 
     if (project) {
+      setHandledActiveDeploymentId(activeDeploymentId);
       setExpandedProjectId(project.id);
     }
-  }, [activeDeploymentId, projects]);
+  }
 
   if (projects.length === 0) {
     return (
