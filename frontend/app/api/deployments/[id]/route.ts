@@ -26,12 +26,15 @@ export async function GET(
   const { id } = await params;
 
   try {
-    const response = await fetch(`${EXPRESS_API_URL}/api/deployments/${id}`, {
-      headers: {
-        "x-internal-api-secret": internalSecret,
+    const response = await fetch(
+      `${EXPRESS_API_URL}/api/deployments/${encodeURIComponent(id)}?userId=${encodeURIComponent(session.user.id)}`,
+      {
+        headers: {
+          "x-internal-api-secret": internalSecret,
+        },
+        cache: "no-store",
       },
-      cache: "no-store",
-    });
+    );
 
     const data = await response.json();
 

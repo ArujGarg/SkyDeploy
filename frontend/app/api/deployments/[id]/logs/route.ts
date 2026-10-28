@@ -27,7 +27,7 @@ export async function GET(
 
   try {
     const response = await fetch(
-      `${EXPRESS_API_URL}/api/deployments/${id}/logs`,
+      `${EXPRESS_API_URL}/api/deployments/${encodeURIComponent(id)}/logs?userId=${encodeURIComponent(session.user.id)}`,
       {
         headers: {
           "x-internal-api-secret": internalSecret,
