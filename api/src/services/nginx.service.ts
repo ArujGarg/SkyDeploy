@@ -4,6 +4,19 @@ import { promisify } from "util";
 
 const execAsync = promisify(exec);
 
+export function subdomainFor(deploymentId: string) {
+  return deploymentId.slice(0, 8);
+}
+
+export async function nginxConfigExists(subdomain: string) {
+  try {
+    await fs.access(`${process.env.NGINX_CONFIG_DIR}/${subdomain}.conf`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function createNginxConfig(subdomain: string, hostPort: number) {
   const config = `
     server {

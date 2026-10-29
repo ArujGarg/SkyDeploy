@@ -1,11 +1,11 @@
 import fs from "fs";
 import path from "path";
 
-export function hasDockerfile(deploymentId: string) {
+export function hasDockerfile(workspaceName: string) {
   const dockerfilePath = path.join(
     process.cwd(),
     "workspace",
-    deploymentId,
+    workspaceName,
     "Dockerfile",
   );
 

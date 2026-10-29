@@ -100,6 +100,14 @@ model Deployment {
   subdomain     String?          @unique
   projectId     String
   project       Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  // Job ownership. A worker claims a QUEUED deployment, then keeps extending
+  // leasedUntil while it works. An expired lease means the worker died.
+  workerId      String?
+  attempts      Int              @default(0)
+  leasedUntil   DateTime?
+
+  @@index([status, leasedUntil])
 }
 
 model DeploymentLog {
