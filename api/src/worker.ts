@@ -24,14 +24,41 @@ import { getAvailablePort } from "./utils/port.util.js";
 
 const DEPLOYMENT_QUEUE = "deployment-queue";
 
+// How long an idle worker waits on the queue before re-checking shutdown.
+const QUEUE_POLL_TIMEOUT_SECONDS = 5;
+
+// Graceful shutdown: a stop signal only sets this flag. The loop checks it
+// between jobs, so the job in progress always runs to completion.
+let shuttingDown = false;
+
+function requestShutdown(signal: string) {
+  if (shuttingDown) {
+    console.log(`Received ${signal} again, exiting immediately`);
+    process.exit(1);
+  }
+
+  shuttingDown = true;
+  console.log(
+    `Received ${signal}, finishing the current job before shutting down`,
+  );
+}
+
+process.on("SIGINT", () => requestShutdown("SIGINT"));
+process.on("SIGTERM", () => requestShutdown("SIGTERM"));
+
 async function startWorker() {
   await connectRedis();
 
   console.log("Worker started");
 
-  while (true) {
-    // wait for next job
-    const result = await redis.brPop(DEPLOYMENT_QUEUE, 0);
+  while (!shuttingDown) {
+    // Wait for the next job. The timeout lets an idle worker notice a
+    // shutdown request. Closing the connection to interrupt a blocking pop
+    // instead could lose a job Redis had just handed us.
+    const result = await redis.brPop(
+      DEPLOYMENT_QUEUE,
+      QUEUE_POLL_TIMEOUT_SECONDS,
+    );
 
     const deploymentId = result?.element;
     if (!deploymentId) {
@@ -308,6 +335,16 @@ async function startWorker() {
       }
     }
   }
+
+  console.log("Worker shutting down");
+
+  await redis.quit();
+  await prisma.$disconnect();
 }
 
-startWorker().catch(console.error);
+startWorker()
+  .then(() => process.exit(0))
+  .catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });
