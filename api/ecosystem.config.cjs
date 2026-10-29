@@ -6,12 +6,17 @@ module.exports = {
       script: "src/index.ts",
       interpreter: "node",
       node_args: "--import tsx",
+      // Without a delay, a process that crashes at startup is restarted so
+      // fast that pm2 gives up after 16 tries and leaves it stopped. With
+      // this, restarts slow down (1s, 1.5s, ... up to 15s) and never stop.
+      exp_backoff_restart_delay: 1000,
     },
     {
       name: "skydeploy-worker",
       script: "src/worker.ts",
       interpreter: "node",
       node_args: "--import tsx",
+      exp_backoff_restart_delay: 1000,
       // On stop/restart pm2 sends SIGINT, then SIGKILL after kill_timeout.
       // The worker finishes its current job on SIGINT, so give it time to.
       // Keep this above the longest expected deployment.

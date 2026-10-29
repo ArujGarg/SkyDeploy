@@ -54,6 +54,39 @@ export async function claimDeployment(deploymentId: string) {
   }
 }
 
+/**
+ * Finds the oldest QUEUED deployment in Postgres and claims it, without using
+ * Redis at all. This is how workers keep working while Redis is down. If
+ * another worker claims a row first, the next oldest one is tried.
+ * Rows that have waited longer than the max queue age are ignored: the reaper
+ * fails those instead of running them hours late.
+ */
+export async function claimNextQueued() {
+  const oldestAllowed = new Date(
+    Date.now() - workerConfig.maxQueueAgeSeconds * 1000,
+  );
+
+  for (let tries = 0; tries < 5; tries++) {
+    const next = await prisma.deployment.findFirst({
+      where: { status: "QUEUED", updatedAt: { gte: oldestAllowed } },
+      orderBy: { createdAt: "asc" },
+      select: { id: true },
+    });
+
+    if (!next) {
+      return null;
+    }
+
+    const attempt = await claimDeployment(next.id);
+
+    if (attempt !== null) {
+      return { deploymentId: next.id, attempt };
+    }
+  }
+
+  return null;
+}
+
 /** Pushes the lease forward. False means we no longer own the deployment. */
 async function extendLease(deploymentId: string, attempt: number) {
   const { count } = await prisma.deployment.updateMany({

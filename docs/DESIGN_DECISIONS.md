@@ -4,14 +4,14 @@ A living record of *why* things are built the way they are, what was traded
 away, and what is still not handled. Written to be re-read months later, so
 it explains instead of assuming you remember.
 
-Last updated: 2026-10-29.
+Last updated: 2026-10-30.
 
 **Contents**
 
 1. [How the system works (recap)](#1-how-the-system-works-recap)
 2. [Graceful worker shutdown](#2-graceful-worker-shutdown)
 3. [Part 1: surviving a worker that dies mid-deployment](#3-part-1-surviving-a-worker-that-dies-mid-deployment)
-4. [Part 2: Redis failure](#4-part-2-redis-failure) (not built yet)
+4. [Part 2: Redis failure](#4-part-2-redis-failure)
 5. [Part 3: autoscaling workers](#5-part-3-autoscaling-workers) (not built yet)
 6. [Operations cheat sheet](#6-operations-cheat-sheet)
 
@@ -239,8 +239,7 @@ failure** (FAILED, no retry): retrying a hang would just hang again.
 - **Single host.** Cleanup (containers, nginx, folders) assumes the reaper
   runs on the same machine as the dead worker. Multi-host needs per-host
   reapers or a different recovery path (Part 3).
-- **Redis outage / data loss** is only partly covered (the stale-QUEUED
-  sweep). Properly handling it is Part 2.
+- **Redis outage / data loss**: handled in Part 2 (section 4).
 - **Heartbeat adds one small Postgres write per active job every 20 s.**
   Negligible now; worth remembering at large scale.
 - The retried attempt does **not** resume; it starts from scratch (re-clone,
@@ -311,11 +310,138 @@ process; and Redis outages (Part 2).
 ---
 
 ## 4. Part 2: Redis failure
-*Not built yet.* Planned: accept deployments while Redis is down (Postgres is
-the record; the reaper pushes ids when Redis is back), enable AOF persistence
-and put the Redis config in the repo (prod runs a hand-made container with
-RDB snapshots only, so up to an hour of queue changes can be lost), and a
-reconnect strategy for the worker.
+
+### 4.1 What Redis does here
+Redis stores one thing: the list `deployment-queue` of deployment ids waiting
+to start. Everything else (repo, status, logs, ownership) is in Postgres. So
+Redis can never lose a deployment, only the *notification* that one is
+waiting. After Part 1 the real decision "who runs this deployment" is made by
+the atomic claim in Postgres, so a worker does not actually need Redis to
+find work; Redis just lets it find work sooner.
+
+### 4.2 What could go wrong, and what used to happen
+| Problem | Before Part 2 |
+|---|---|
+| Redis unreachable when a user deploys | The API call to add the id either waited with no timeout (the client queues commands while reconnecting) or threw, and the `catch` marked the new deployment `FAILED` even though it was valid |
+| Redis drops while the worker waits on the list | The error was not handled in the loop, so the process exited with code 1 and pm2 restarted it. The restarted process then waited for Redis to connect before doing anything, so it sat idle for the whole outage even though deployments were waiting in Postgres. |
+| Redis unreachable while the reaper runs | The reaper's Redis call waited, stalling the whole pass, including steps that only need Postgres |
+| Redis restarts and loses data | Waiting ids were lost; the reaper re-pushed them after ~30 s (already handled in Part 1), possibly out of order |
+| The Redis container itself | Started by hand on EC2 with snapshots only (after 1 h / 5 min / 60 s depending on change counts), and not described in the repo (`docker-compose.yml` named a different container with no volume) |
+
+### 4.3 What we changed
+- **Redis is optional for finding work.** `job-source.service.ts:
+  waitForNextJob` first waits on the Redis list when Redis is connected. If
+  Redis is not connected, or the wait fails, it calls
+  `claimNextQueued()` instead: take the oldest `QUEUED` row from Postgres
+  (`ORDER BY createdAt ASC`) and claim it with the same atomic update as
+  always. If nothing is waiting it pauses 5 s so it does not spin. It never
+  polls Postgres while Redis is healthy.
+- **The worker never exits because of Redis.** Both Redis connections start
+  in the background (`connectRedis()` does not wait), so a worker started
+  during an outage is immediately useful. Loop errors back off 1 s, 2 s, up
+  to 30 s. Redis errors are logged at most once per 30 s per connection.
+- **The API accepts deployments while Redis is down.** `enqueueDeployment`
+  now returns `true`/`false` and never waits or throws because of Redis
+  (the Redis client is created with `disableOfflineQueue`, so commands fail
+  immediately when disconnected). If it returns `false`, the deployment stays
+  `QUEUED`, a log line says "The queue is temporarily unavailable; the
+  deployment will start automatically", and the API still answers `201`.
+  The old "mark FAILED" branch is removed.
+- **What `201` means:** "we received and saved your request", exactly as
+  before. It never meant the deployment succeeded (the body has
+  `status: "QUEUED"`; the UI then polls for the final `SUCCESS`/`FAILED`).
+- **The reaper tolerates Redis being down.** It skips only the "push ids
+  back to Redis" step; failing abandoned jobs and expiring old queued rows
+  still run. Pushes are oldest first, to keep order.
+- **`GET /health`** reports `database` and `redis`. Redis down is
+  `degraded` (HTTP 200), database down is `down` (HTTP 503).
+- **Redis persistence and repo parity.** `docker-compose.yml` now defines
+  Redis as production should run it: `redis:7-alpine`, container
+  `skydeploy-redis`, `--appendonly yes --appendfsync everysec`, a data
+  volume, bound to `127.0.0.1`, `restart: unless-stopped`.
+- **pm2 backoff.** `exp_backoff_restart_delay: 1000` for both processes.
+
+### 4.4 pm2's restart limit (a correction)
+An earlier note here said pm2 gives up after 16 restarts during a long Redis
+outage. Reading pm2 7.0.4's source showed that was overstated. A restart only
+counts as "unstable" if the process died within 1 s of starting **and** it
+happens within ~16 s of the process being (re)started by hand. After 16 such
+restarts pm2 sets it to `errored` and stops. So it protects against a process
+that crashes immediately at startup (typically a bad deploy), not against a
+worker that has been running for hours. With the backoff delay, restarts of a
+crash-looping process spread out (1 s up to 15 s) and never reach the limit;
+the trade-off is that a permanently broken deploy now retries forever every
+15 s instead of stopping silently, so watch the logs / `/health` after a
+deploy.
+
+### 4.5 Decisions and trade-offs
+- **Accept vs reject while Redis is down.** Accept: the user's intent is
+  durably recorded in Postgres and runs seconds later. Reject would force the
+  user to retry for a problem that is not theirs. Safety net: a deployment
+  still `QUEUED` after 1 hour is failed by the reaper.
+- **Postgres polling during an outage.** One simple query (oldest `QUEUED`
+  row, `LIMIT 1`, using the `status` index) every 5 s per worker, only while
+  Redis is down. That is far below what Postgres handles, and the reaper
+  already queries every 30 s. The cost is up to ~5 s of extra delay.
+- **Fail fast, do not queue commands in memory.** The default Redis client
+  holds commands while reconnecting, which makes callers hang. Failing fast
+  lets callers choose (the API accepts anyway, the worker falls back).
+- **Append-only persistence, fsync every second.** Writes are tiny
+  (~50 bytes per queue operation), appended in the background, so the disk
+  cost is negligible at this scale. Persistence is a convenience, not what
+  protects deployments (Postgres plus the reaper do), but it avoids needless
+  repairs and keeps ordering.
+- **Not using a Postgres-only queue (like pg-boss).** It would remove Redis
+  as a dependency. We keep Redis for instant pickup and low database load;
+  the fallback gives most of the resilience without the rewrite.
+
+### 4.6 Known limitations
+- Redis is still a single instance. True high availability means Redis
+  Sentinel or a managed service (ElastiCache) with replicas.
+- During an outage new work starts up to ~5 s later and in `createdAt` order
+  rather than strict Redis order. Retried jobs go behind others.
+- If Postgres is down, nothing works (expected; it is a managed service).
+- Old `QUEUED` rows already in the database are failed by the reaper after an
+  hour, and are never claimed by the Postgres fallback.
+
+### 4.7 How it was tested
+Locally (no production access), against a throwaway Postgres: the fallback
+claims the oldest first, concurrent callers never get the same row, rows past
+the max queue age are ignored; the worker loop takes the Redis path when
+healthy (and does not poll Postgres), skips ids that are already taken, falls
+back on a Redis error or when Redis is down, and pauses instead of spinning;
+the reaper, with Redis down, still fails exhausted jobs, requeues retryable
+ones and expires old rows, and pushes the missing ids once Redis returns.
+Against a port with nothing listening: connecting returns immediately, the
+process survives repeated failed connects, adding to the queue returns `false`
+instantly, a blocking pop fails immediately, and errors are logged once per
+30 s. This found and fixed a real bug: closing a never-connected Redis client
+waited forever, which would have blocked a graceful shutdown during an outage.
+*EC2 tests (stop Redis, deploy, restart worker, start Redis) are recorded
+below once run.*
+
+### 4.8 Files
+`api/src/lib/redis.ts`, `services/queue.service.ts`,
+`services/job-source.service.ts` (new), `services/lease.service.ts`
+(`claimNextQueued`), `services/reaper.service.ts`, `worker.ts`, `index.ts`
+(`/health`, accept-while-down), `ecosystem.config.cjs`, `docker-compose.yml`.
+
+### 4.9 Likely interview questions
+- **"What if Redis dies?"** Deployments are in Postgres; workers fall back to
+  claiming the oldest queued row directly; the API still accepts requests;
+  the reaper re-pushes ids when Redis returns.
+- **"Then why have Redis at all?"** Instant pickup without polling the
+  database, and it is the standard building block for a queue; here it is an
+  optimisation, not the source of truth.
+- **"Why does the API return success if the queue is down?"** `201` means
+  "recorded", not "deployed"; the record is durable and something is
+  guaranteed to pick it up or fail it visibly.
+- **"Is polling Postgres every 5 s a problem?"** No: one cheap indexed query,
+  only during outages.
+- **"What are the remaining single points of failure?"** One Redis, one
+  database, one EC2 host.
+
+---
 
 ## 5. Part 3: autoscaling workers
 *Not built yet.* Planned: fix port-allocation races (let Docker pick the
@@ -344,6 +470,12 @@ FROM "Deployment"
 WHERE status IN ('QUEUED','CLONING','BUILDING','DEPLOYING')
 ORDER BY "updatedAt";
 ```
+
+**Health:** `GET /health` on the API returns `ok`, `degraded` (Redis down) or
+`down` (database unreachable, HTTP 503).
+
+**Redis on the server:** `cd api && docker compose up -d redis` (start only
+Redis; the compose file also has a local-dev Postgres).
 
 **Worker log lines worth knowing:** `Reaper: {...}` (something was
 recovered), `Lease for deployment ... was lost`, `Received SIGINT, finishing

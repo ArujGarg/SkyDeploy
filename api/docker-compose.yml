@@ -1,3 +1,6 @@
+# Local Postgres is for development only; production uses a hosted database.
+# Redis below mirrors how production runs it. On the server start ONLY Redis:
+#   docker compose up -d redis
 services:
   postgres:
     image: postgres:17
@@ -15,11 +18,23 @@ services:
       - postgres_data:/var/lib/postgresql/data
 
   redis:
-    image: redis:7
-    container_name: shipyard-redis
+    image: redis:7-alpine
+    container_name: skydeploy-redis
 
+    # Append every change to a log on disk and sync it once per second, so a
+    # crash loses at most ~1 second of queue changes. (The default only takes
+    # a snapshot every few minutes to an hour.) Only the queue lives here.
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
+
+    # Local only: the API and worker run on the same machine.
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
+
+    volumes:
+      - redis_data:/data
+
+    restart: unless-stopped
 
 volumes:
   postgres_data:
+  redis_data:

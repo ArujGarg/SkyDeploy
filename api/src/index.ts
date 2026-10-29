@@ -2,8 +2,9 @@ import "./config/env.js";
 
 import express from "express";
 import { prisma } from "./db/prisma.js";
-import { connectRedis } from "./lib/redis.js";
+import { connectRedis, isRedisReady } from "./lib/redis.js";
 import { isAllowedGithubRepoUrl } from "./services/git.service.js";
+import { addDeploymentLog } from "./services/log.service.js";
 import { enqueueDeployment } from "./services/queue.service.js";
 import cors from "cors";
 const app = express();
@@ -78,9 +79,28 @@ app.get("/api/deployments/:id", async (req, res) => {
   }
 });
 
-app.post("/api/deployments", async (req, res) => {
-  let deploymentId: string | null = null;
+// Reports whether the dependencies are reachable. Redis being down is
+// "degraded", not "down": deployments still run without it.
+app.get("/health", async (_req, res) => {
+  let database = false;
 
+  try {
+    await prisma.deployment.findFirst({ select: { id: true } });
+    database = true;
+  } catch (error) {
+    console.error("Health check: database unreachable", error);
+  }
+
+  const redis = isRedisReady();
+
+  return res.status(database ? 200 : 503).json({
+    status: !database ? "down" : redis ? "ok" : "degraded",
+    database,
+    redis,
+  });
+});
+
+app.post("/api/deployments", async (req, res) => {
   try {
     if (!authenticateInternalRequest(req)) {
       return res.status(403).json({
@@ -140,34 +160,26 @@ app.post("/api/deployments", async (req, res) => {
       },
     });
 
-    deploymentId = deployment.id;
+    // The deployment is saved in Postgres, which is what makes it safe. The
+    // queue only tells a worker to look sooner. If Redis is unreachable we
+    // still accept the deployment: a worker finds it in Postgres shortly.
+    const queued = await enqueueDeployment(deployment.id);
 
-    // IMPORTANT: only return success after the job was actually queued.
-    await enqueueDeployment(deployment.id);
+    if (!queued) {
+      try {
+        await addDeploymentLog(
+          deployment.id,
+          "QUEUE",
+          "The queue is temporarily unavailable; the deployment will start automatically",
+        );
+      } catch (logError) {
+        console.error("Failed to log queue outage:", logError);
+      }
+    }
 
     return res.status(201).json(deployment);
   } catch (error) {
-    console.error("Failed to create or enqueue deployment:", error);
-
-    // If we created the deployment but failed to put it in Redis,
-    // don't leave it stuck in QUEUED forever.
-    if (deploymentId) {
-      try {
-        await prisma.deployment.update({
-          where: {
-            id: deploymentId,
-          },
-          data: {
-            status: "FAILED",
-            completedAt: new Date(),
-            errorMessage:
-              "Failed to queue deployment. The deployment service may be temporarily unavailable.",
-          },
-        });
-      } catch (updateError) {
-        console.error("Failed to mark deployment as FAILED:", updateError);
-      }
-    }
+    console.error("Failed to create deployment:", error);
 
     return res.status(500).json({
       message: "Failed to start deployment. Please try again.",
@@ -278,7 +290,8 @@ app.get("/api/projects", async (req, res) => {
   }
 });
 
-await connectRedis();
+// Connects in the background; the API starts even if Redis is down.
+connectRedis();
 
 app.listen(3001, () => {
   console.log("Server is running on port 3001");

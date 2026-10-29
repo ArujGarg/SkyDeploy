@@ -2,6 +2,7 @@ import { prisma } from "../db/prisma.js";
 import { ACTIVE_STATUSES, workerConfig } from "../config/worker.config.js";
 import { cleanupDeploymentResources } from "./cleanup.service.js";
 import { addDeploymentLog } from "./log.service.js";
+import { isRedisReady } from "../lib/redis.js";
 import { enqueueDeployment, isDeploymentQueued } from "./queue.service.js";
 
 // The reaper finds deployments that are stuck because nobody is working on
@@ -11,11 +12,15 @@ import { enqueueDeployment, isDeploymentQueued } from "./queue.service.js";
 // we just observed), so if two reapers race, only one of them changes the row.
 
 export type ReaperQueue = {
+  /** False while Redis is unreachable; Redis-only steps are then skipped. */
+  isReady(): boolean;
   isQueued(deploymentId: string): Promise<boolean>;
-  enqueue(deploymentId: string): Promise<void>;
+  /** Returns false if the id could not be added (never throws or waits). */
+  enqueue(deploymentId: string): Promise<boolean>;
 };
 
 const redisQueue: ReaperQueue = {
+  isReady: isRedisReady,
   isQueued: isDeploymentQueued,
   enqueue: enqueueDeployment,
 };
@@ -107,12 +112,9 @@ export async function reapOnce(
         `Worker stopped responding during attempt ${deployment.attempts} of ${maxAttempts}; queueing a retry`,
       );
 
-      try {
-        await queue.enqueue(deployment.id);
-      } catch (error) {
-        // The row is QUEUED in Postgres, so step 3 below picks it up later.
-        console.error(`Failed to enqueue ${deployment.id} for retry`, error);
-      }
+      // If Redis is unreachable this returns false. The row is QUEUED in
+      // Postgres, so a worker finds it there, or step 3 pushes it later.
+      await queue.enqueue(deployment.id);
     }
   }
 
@@ -149,18 +151,21 @@ export async function reapOnce(
   //    popping the id and claiming it, or Redis lost it): push them again.
   //    Checking first avoids piling up duplicates for jobs that are just
   //    waiting their turn behind a long queue.
-  const stale = await prisma.deployment.findMany({
-    where: {
-      status: "QUEUED",
-      updatedAt: { lt: secondsAgo(staleQueuedSeconds) },
-    },
-    select: { id: true },
-  });
+  //    Skipped while Redis is unreachable. Oldest first, to keep the order.
+  const stale = queue.isReady()
+    ? await prisma.deployment.findMany({
+        where: {
+          status: "QUEUED",
+          updatedAt: { lt: secondsAgo(staleQueuedSeconds) },
+        },
+        orderBy: { updatedAt: "asc" },
+        select: { id: true },
+      })
+    : [];
 
   for (const { id } of stale) {
     try {
-      if (!(await queue.isQueued(id))) {
-        await queue.enqueue(id);
+      if (!(await queue.isQueued(id)) && (await queue.enqueue(id))) {
         result.repushed.push(id);
         await addDeploymentLog(
           id,

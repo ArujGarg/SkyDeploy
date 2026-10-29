@@ -2,7 +2,12 @@ import "./config/env.js";
 
 import { workerConfig } from "./config/worker.config.js";
 import { prisma } from "./db/prisma.js";
-import { connectRedis, redis } from "./lib/redis.js";
+import {
+  closeRedis,
+  connectRedis,
+  createBlockingRedisClient,
+  redis,
+} from "./lib/redis.js";
 import {
   cleanupDeploymentResources,
   cleanupWorkspace,
@@ -19,7 +24,6 @@ import {
 import { cloneRepository } from "./services/git.service.js";
 import { waitForHealthCheck } from "./services/health.service.js";
 import {
-  claimDeployment,
   LeaseLostError,
   startLease,
   updateOwned,
@@ -31,6 +35,7 @@ import {
   reloadNginx,
   subdomainFor,
 } from "./services/nginx.service.js";
+import { waitForNextJob } from "./services/job-source.service.js";
 import { DEPLOYMENT_QUEUE } from "./services/queue.service.js";
 import { startReaper } from "./services/reaper.service.js";
 import { getAvailablePort } from "./utils/port.util.js";
@@ -56,21 +61,11 @@ process.on("SIGTERM", () => requestShutdown("SIGTERM"));
 
 // A blocking BRPOP holds its connection, so it gets its own client. Sharing
 // one would make the reaper's Redis commands wait behind it.
-const blockingRedis = redis.duplicate();
+const blockingRedis = createBlockingRedisClient();
 
-async function processDeployment(deploymentId: string) {
-  // Take ownership first. If someone else already has this deployment (a
-  // duplicate queue entry, or a retry another worker picked up), do nothing.
-  const attempt = await claimDeployment(deploymentId);
-
-  if (attempt === null) {
-    console.log(
-      `Deployment ${deploymentId} is not queued any more (taken or finished), skipping`,
-    );
-
-    return;
-  }
-
+// The deployment has already been claimed by this worker (see
+// job-source.service.ts) before this runs.
+async function processDeployment(deploymentId: string, attempt: number) {
   const lease = startLease(deploymentId, attempt);
   const workspaceName = workspaceNameFor(deploymentId, attempt);
 
@@ -330,45 +325,62 @@ async function processDeployment(deploymentId: string) {
 }
 
 async function startWorker() {
-  await connectRedis();
-  await blockingRedis.connect();
+  // Both connect in the background: the worker must start, and keep finding
+  // work in Postgres, even while Redis is down.
+  connectRedis();
+  connectRedis(blockingRedis);
 
   console.log(`Worker ${WORKER_ID} started`);
 
   const reaper = startReaper();
 
+  const queue = {
+    get isReady() {
+      return blockingRedis.isReady;
+    },
+    async pop(timeoutSeconds: number) {
+      // Waiting here instead of closing the connection to interrupt it is what
+      // makes a shutdown request safe: no job can be lost mid-pop.
+      const result = await blockingRedis.brPop(DEPLOYMENT_QUEUE, timeoutSeconds);
+
+      return result?.element ?? null;
+    },
+  };
+
+  let errorDelayMs = 0;
+
   while (!shuttingDown) {
-    // Wait for the next job. The timeout lets an idle worker notice a
-    // shutdown request. Closing the connection to interrupt a blocking pop
-    // instead could lose a job Redis had just handed us.
-    const result = await blockingRedis.brPop(
-      DEPLOYMENT_QUEUE,
-      workerConfig.queuePollTimeoutSeconds,
-    );
-
-    const deploymentId = result?.element;
-
-    if (!deploymentId) {
-      continue;
-    }
-
-    console.log(`Received deployment ${deploymentId}`);
-
     try {
-      await processDeployment(deploymentId);
+      const job = await waitForNextJob(queue);
+
+      errorDelayMs = 0;
+
+      if (!job) {
+        continue;
+      }
+
+      console.log(`Received deployment ${job.deploymentId}`);
+
+      await processDeployment(job.deploymentId, job.attempt);
     } catch (error) {
-      // Typically the database being unreachable. The deployment is still
-      // QUEUED in Postgres, so the reaper queues it again; just don't spin.
-      console.error(`Could not process ${deploymentId}`, error);
-      await new Promise((resolve) => setTimeout(resolve, 2000));
+      // Typically Postgres being unreachable. Anything still QUEUED is found
+      // again later, so just back off (1s, 2s, ... up to 30s) and carry on.
+      errorDelayMs = Math.min(Math.max(errorDelayMs * 2, 1000), 30_000);
+
+      console.error(
+        `Worker loop error (retrying in ${errorDelayMs / 1000}s):`,
+        error,
+      );
+
+      await new Promise((resolve) => setTimeout(resolve, errorDelayMs));
     }
   }
 
   console.log("Worker shutting down");
 
   reaper.stop();
-  await blockingRedis.quit();
-  await redis.quit();
+  await closeRedis(blockingRedis);
+  await closeRedis(redis);
   await prisma.$disconnect();
 }
 
