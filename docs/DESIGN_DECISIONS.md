@@ -417,8 +417,24 @@ process survives repeated failed connects, adding to the queue returns `false`
 instantly, a blocking pop fails immediately, and errors are logged once per
 30 s. This found and fixed a real bug: closing a never-connected Redis client
 waited forever, which would have blocked a graceful shutdown during an outage.
-*EC2 tests (stop Redis, deploy, restart worker, start Redis) are recorded
-below once run.*
+
+**Tested on the real EC2 server (2026-10-30):**
+- Recreating the Redis container (briefly gone) while the API and worker were
+  running: the worker logged "Waiting on the queue failed, checking Postgres
+  instead", did not crash, and reconnected on its own. Redis then reported
+  `appendonly yes` / `appendfsync everysec`.
+- Redis stopped: `/health` reported `degraded` (database true, redis false).
+  A deployment started from the UI was accepted, and the worker found it in
+  Postgres and ran it to success.
+- Worker restarted (`pm2 restart`) while Redis was still stopped: the old
+  worker finished cleanly, the new one started without waiting for Redis, and
+  a second deployment ran to success.
+- Redis started again: `/health` returned to `ok`, no process restarted at any
+  point (restart counters unchanged), and the repeated `ECONNREFUSED` errors
+  were rate-limited in the logs.
+
+Not tested on EC2: Redis losing its data while deployments are waiting
+(covered by the Part 1 sweep and the local tests).
 
 ### 4.8 Files
 `api/src/lib/redis.ts`, `services/queue.service.ts`,
