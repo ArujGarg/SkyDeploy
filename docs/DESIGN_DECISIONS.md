@@ -255,9 +255,20 @@ heartbeat noticing it; reaper retry / fail / ignore-healthy / ignore-legacy;
 two reapers racing on one job; stale-QUEUED re-push without duplicates;
 expiry of very old `QUEUED` rows.
 
-**Not yet tested:** the full `processDeployment` flow (needs Docker, Redis,
-nginx). That is verified on EC2: `kill -9` the worker mid-build, confirm the
-retry; and a job that always kills the worker, confirm `FAILED` after 3.
+**Tested on the real EC2 server (2026-10-29)**, with `kill -9` on the worker
+(not a graceful stop):
+- *Killed once mid-build:* about 70 s later the reaper requeued the job;
+  attempt 2 cloned into its own folder, built, started the container and
+  ended SUCCESS. No workspace folders were left behind.
+- *Killed on every attempt (three times):* attempt 3's leftover folder from
+  attempt 2 had been deleted at its start; after the third kill the reaper
+  marked the deployment FAILED ("retry limit reached") about 60 s later and
+  no container, image, workspace or nginx route remained.
+- The UI showed the RETRY log lines and the final failure message correctly.
+
+Not covered by tests: a frozen (not dead) worker that wakes up after being
+replaced, tested only at the database level (fencing), not with a real frozen
+process; and Redis outages (Part 2).
 
 ### 3.9 Other fixes made along the way
 - `docker.service.ts` uses `execFile` (no shell, no string interpolation)
