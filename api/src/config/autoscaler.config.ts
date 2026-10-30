@@ -21,6 +21,9 @@ export const autoscalerConfig = {
   minFreeMemoryMb: numberFromEnv("MIN_FREE_MEMORY_MB", 500),
   // After any change, wait this long before changing again.
   cooldownSeconds: numberFromEnv("SCALER_COOLDOWN_SECONDS", 60),
+  // How often leftover deployments and Docker caches are cleaned up. This runs
+  // in the autoscaler process because there is exactly one of it.
+  housekeepingIntervalMinutes: numberFromEnv("HOUSEKEEPING_INTERVAL_MINUTES", 60),
 };
 
 export type ScalerSettings = typeof autoscalerConfig;

@@ -714,11 +714,58 @@ paragraph (line breaks were collapsed).
   failure, batching, failing sink, streaming of partial lines, exit codes,
   timeout, and the short error message.
 
+### A redeploy stops the previous version, and Docker is cleaned up hourly
+Before, every deployment created a container, an image and an nginx route, and
+nothing ever removed them once a deployment had succeeded. Redeploying a
+project left a copy of the app running per redeploy (memory) and an image per
+redeploy (disk). That is how the disk reached 72% with 35 images and 36
+containers before it was cleaned by hand.
+- **Rule: a project keeps one running deployment, the newest one that
+  succeeded.** After the worker records a new deployment as `SUCCESS`
+  (`stopSupersededDeployments`, `services/retention.service.ts`) it stops the
+  project's older live deployments: container (found by label, plus the id saved
+  on the row for deployments made before labels existed), image, nginx route and
+  workspace folders, then logs "Stopped: replaced by a newer deployment".
+  Doing it after `SUCCESS` means there is never a moment with nothing running,
+  and a failed redeploy leaves the previous working version running.
+- **"Newest" means newest by creation time**, not by who finishes last, so two
+  redeploys finishing together reach the same answer and cannot stop each other.
+  Each old deployment is claimed with a conditional update (`stoppedAt` set
+  where it was still null), so several workers clean it exactly once. If the
+  cleanup fails, the claim is released and it is retried; it never fails the new
+  deployment.
+- **`Deployment.stoppedAt`** (nullable timestamp, migration
+  `20261030190000_add_deployment_stopped_at`) records that it was replaced.
+  `status` stays `SUCCESS` because it did succeed. A new status value would have
+  to be handled by every place that tests for `SUCCESS`/`FAILED` (polling, badges,
+  the reaper). The UI shows "Replaced" and no "Open" link.
+- **Hourly housekeeping** (`runHousekeeping`) runs in the autoscaler process,
+  because exactly one of it exists: (1) retries any stop that failed earlier,
+  (2) removes `skydeploy:*` images whose deployment is neither live nor being
+  built, (3) `docker image prune`, (4) `docker builder prune --max-used-space
+  3gb`. Docker's build cache has no limit of its own. Docker 29 replaced
+  `--keep-storage` with `--max-used-space`. Volumes are deliberately not pruned
+  (Redis keeps its queue in one). Interval: `HOUSEKEEPING_INTERVAL_MINUTES`
+  (default 60; first run one minute after the autoscaler starts).
+- **Trade-off: old URLs stop working.** A deployment's URL is derived from its
+  id, so after a redeploy the previous link dies and the new deployment has a new
+  URL. A permanent per-project URL that always points at the newest deployment
+  (as Vercel does) would fix that, but needs project-level subdomain names and
+  nginx switching between deployments. Not built; a good "next step".
+- Deployed apps have no persistent storage, so stopping one loses no user data.
+- Tested locally (Docker and nginx replaced by fakes, real Postgres): which
+  deployments are stopped (older live ones only, other projects, failed,
+  in-progress and already-stopped ones untouched), idempotence, order
+  independence, five concurrent callers cleaning each deployment exactly once,
+  failed cleanup being retried, and image selection. The real Docker commands run
+  for the first time on EC2.
+
 ---
 
 ## 6. Operations cheat sheet
 
-**Env vars** (all optional; autoscaler ones are listed in section 5.4): `LEASE_SECONDS`, `HEARTBEAT_SECONDS`,
+**Env vars** (all optional; autoscaler ones are listed in section 5.4, plus
+`HOUSEKEEPING_INTERVAL_MINUTES`): `LEASE_SECONDS`, `HEARTBEAT_SECONDS`,
 `MAX_ATTEMPTS`, `REAPER_INTERVAL_SECONDS`, `STALE_QUEUED_SECONDS`,
 `MAX_QUEUE_AGE_SECONDS`, `CLONE_TIMEOUT_MS`, `BUILD_TIMEOUT_MS`,
 `ATTEMPT_TIMEOUT_MS`, `QUEUE_POLL_TIMEOUT_SECONDS`.

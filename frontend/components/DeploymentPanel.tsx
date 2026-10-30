@@ -24,6 +24,8 @@ export type Deployment = {
   errorMessage: string | null;
   createdAt: string;
   completedAt: string | null;
+  // Set once a newer deployment of the same project replaced this one.
+  stoppedAt?: string | null;
 };
 
 export type DeploymentLog = {
@@ -188,7 +190,9 @@ export function DeploymentPanel({ deployment, logs }: DeploymentPanelProps) {
       </div>
 
       {/* Success */}
-      {deployment.status === "SUCCESS" && deployment.deployedUrl && (
+      {deployment.status === "SUCCESS" &&
+        deployment.deployedUrl &&
+        !deployment.stoppedAt && (
         <div className="mt-5 rounded-xl border border-green-200 bg-green-50 p-4">
           <p className="text-sm font-medium text-green-800">
             Your application is live
@@ -209,6 +213,19 @@ export function DeploymentPanel({ deployment, logs }: DeploymentPanelProps) {
               <ExternalLink className="h-4 w-4" />
             </a>
           </div>
+        </div>
+      )}
+
+      {/* Replaced */}
+      {deployment.status === "SUCCESS" && deployment.stoppedAt && (
+        <div className="mt-5 rounded-xl border border-zinc-200 bg-zinc-50 p-4">
+          <p className="text-sm font-medium text-zinc-700">
+            Replaced by a newer deployment
+          </p>
+
+          <p className="mt-1 text-sm text-zinc-500">
+            This version is no longer running.
+          </p>
         </div>
       )}
 

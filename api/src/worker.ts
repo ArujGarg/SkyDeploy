@@ -40,6 +40,7 @@ import {
 import { waitForNextJob } from "./services/job-source.service.js";
 import { DEPLOYMENT_QUEUE } from "./services/queue.service.js";
 import { startReaper } from "./services/reaper.service.js";
+import { stopSupersededDeployments } from "./services/retention.service.js";
 
 // Graceful shutdown: a stop signal only sets this flag. The loop checks it
 // between jobs, so the job in progress always runs to completion.
@@ -283,6 +284,21 @@ async function processDeployment(deploymentId: string, attempt: number) {
     );
 
     console.log(`Application available at http://localhost:${hostPort}`);
+
+    // The new version is live, so older versions of this project can go. Done
+    // after SUCCESS is recorded so there is never a moment with nothing
+    // running, and a failure here never fails the deployment.
+    try {
+      const stopped = await stopSupersededDeployments(deployment.projectId);
+
+      if (stopped.length > 0) {
+        console.log(
+          `Stopped ${stopped.length} older deployment(s) of this project`,
+        );
+      }
+    } catch (error) {
+      console.error("Failed to stop older deployments", error);
+    }
   } catch (error) {
     if (error instanceof LeaseLostError || lease.isLost()) {
       // Another attempt owns this deployment now. Leave its shared state

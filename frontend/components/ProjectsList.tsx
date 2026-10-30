@@ -266,6 +266,12 @@ function DeploymentRow({
               {status.label}
             </span>
 
+            {deployment.stoppedAt && (
+              <span className="rounded-full border border-zinc-200 bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-500">
+                Replaced
+              </span>
+            )}
+
             <span className="font-mono text-xs text-zinc-400">
               {deployment.id.slice(0, 8)}
             </span>
@@ -296,27 +302,41 @@ function DeploymentRow({
               <span>{deployment.branch}</span>
             </div>
 
-            {deployment.status === "SUCCESS" && deployment.deployedUrl && (
-              <div className="rounded-xl border border-green-200 bg-green-50 p-4">
-                <p className="text-sm font-medium text-green-800">
-                  Application is live
+            {deployment.status === "SUCCESS" &&
+              deployment.deployedUrl &&
+              !deployment.stoppedAt && (
+                <div className="rounded-xl border border-green-200 bg-green-50 p-4">
+                  <p className="text-sm font-medium text-green-800">
+                    Application is live
+                  </p>
+
+                  <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <code className="min-w-0 truncate rounded-lg bg-white px-3 py-2 text-sm text-green-800">
+                      {deployment.deployedUrl}
+                    </code>
+
+                    <a
+                      href={deployment.deployedUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex shrink-0 cursor-pointer items-center justify-center gap-2 rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-green-500"
+                    >
+                      Open
+                      <ExternalLink className="h-4 w-4" />
+                    </a>
+                  </div>
+                </div>
+              )}
+
+            {deployment.status === "SUCCESS" && deployment.stoppedAt && (
+              <div className="rounded-xl border border-zinc-200 bg-white p-4">
+                <p className="text-sm font-medium text-zinc-700">
+                  Replaced by a newer deployment
                 </p>
 
-                <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                  <code className="min-w-0 truncate rounded-lg bg-white px-3 py-2 text-sm text-green-800">
-                    {deployment.deployedUrl}
-                  </code>
-
-                  <a
-                    href={deployment.deployedUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="inline-flex shrink-0 cursor-pointer items-center justify-center gap-2 rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-green-500"
-                  >
-                    Open
-                    <ExternalLink className="h-4 w-4" />
-                  </a>
-                </div>
+                <p className="mt-1 text-sm text-zinc-500">
+                  This version is no longer running.
+                </p>
               </div>
             )}
 

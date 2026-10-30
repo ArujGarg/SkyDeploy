@@ -107,6 +107,11 @@ model Deployment {
   attempts      Int              @default(0)
   leasedUntil   DateTime?
 
+  // Set when a newer deployment of the same project replaced this one: its
+  // container, image and route were removed. status stays SUCCESS (it did
+  // succeed); this says it is no longer running.
+  stoppedAt     DateTime?
+
   @@index([status, leasedUntil])
 }
 

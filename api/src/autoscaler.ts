@@ -14,6 +14,7 @@ import {
   decideScaling,
   readQueueMetrics,
 } from "./services/autoscaler.service.js";
+import { runHousekeeping } from "./services/retention.service.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -52,6 +53,32 @@ async function readAvailableMemoryMb() {
   }
 
   return os.freemem() / 1024 / 1024;
+}
+
+// First run one minute after start, then every housekeepingIntervalMinutes.
+let nextHousekeepingAt = Date.now() + 60_000;
+let housekeepingRunning = false;
+
+function maybeRunHousekeeping() {
+  if (housekeepingRunning || Date.now() < nextHousekeepingAt) {
+    return;
+  }
+
+  housekeepingRunning = true;
+  nextHousekeepingAt =
+    Date.now() + autoscalerConfig.housekeepingIntervalMinutes * 60_000;
+
+  // Not awaited: it can take a while and must not delay scaling decisions.
+  runHousekeeping()
+    .then((report) => {
+      console.log(
+        `Housekeeping: retried ${report.retried} stop(s), removed ${report.imagesRemoved} unused image(s)`,
+      );
+    })
+    .catch((error) => console.error("Housekeeping failed", error))
+    .finally(() => {
+      housekeepingRunning = false;
+    });
 }
 
 let lastChangeAt: number | null = null;
@@ -122,6 +149,8 @@ async function run() {
   process.on("SIGTERM", () => (shuttingDown = true));
 
   while (!shuttingDown) {
+    maybeRunHousekeeping();
+
     try {
       await tick();
     } catch (error) {

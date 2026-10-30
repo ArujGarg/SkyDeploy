@@ -21,6 +21,7 @@ export type DeploymentHistory = {
   completedAt: string | null;
   deployedUrl: string | null;
   errorMessage: string | null;
+  stoppedAt: string | null;
 };
 
 export type Project = {
