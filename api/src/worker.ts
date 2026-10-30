@@ -22,6 +22,7 @@ import {
   runContainer,
   stopAndRemoveContainer,
 } from "./services/docker.service.js";
+import { BuildLogWriter } from "./services/build-log.service.js";
 import { cloneRepository } from "./services/git.service.js";
 import { waitForHealthCheck } from "./services/health.service.js";
 import {
@@ -154,7 +155,28 @@ async function processDeployment(deploymentId: string, attempt: number) {
 
     await addDeploymentLog(deploymentId, "BUILDING", "Building Docker image");
 
-    const imageTag = await buildImage(deployment.id, workspaceName);
+    // Build output goes to the deployment's logs while the build runs.
+    const buildLog = new BuildLogWriter(
+      (rows) =>
+        prisma.deploymentLog.createMany({
+          data: rows.map((row) => ({ deploymentId, ...row })),
+        }),
+      { shouldStop: () => lease.isLost() },
+    );
+
+    buildLog.start();
+
+    let imageTag: string;
+
+    try {
+      imageTag = await buildImage(deployment.id, workspaceName, (line) =>
+        buildLog.push(line),
+      );
+      await buildLog.finish(false);
+    } catch (error) {
+      await buildLog.finish(true);
+      throw error;
+    }
 
     await addDeploymentLog(
       deploymentId,

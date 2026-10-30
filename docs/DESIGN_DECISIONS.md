@@ -673,6 +673,47 @@ shows a branch that was not deployed.
 - Deliberately not built: a branch picker in the UI. It would be a feature,
   not part of the end-to-end flow.
 
+### Build output is now shown live in the deployment logs
+Before, `docker build` ran through `execFile`, which only returns when the
+command has finished. A successful build showed nothing between "Building
+Docker image" and "built successfully". A failed build put Node's whole error
+(the full command line plus every line of output) into one `ERROR` log row and
+into `Deployment.errorMessage`, which the UI rendered as a single unreadable
+paragraph (line breaks were collapsed).
+- `buildImage` now runs `docker build --progress=plain` through `spawn` via
+  `runStreaming`, which hands each line of stdout and stderr to a callback as
+  it appears (a chunk can end mid-line, so the unfinished part is carried over).
+- `BuildLogWriter` (`services/build-log.service.ts`) collects the lines and
+  saves them as `DeploymentLog` rows with stage `BUILD`, in one batch about once
+  a second (`createMany`), instead of one insert per line. The existing UI
+  already polls the logs every 2 s, so the lines simply appear.
+- **Limits, so a chatty build cannot flood the database or slow the page:**
+  500 lines per deployment, 500 characters per line, control and colour codes
+  stripped. Past the cap one line says how many lines were not shown, and on
+  failure the last 25 lines are still written, because the real error is
+  usually at the end. About 100 to 150 bytes per row, so roughly 75 KB per
+  deployment at most.
+- **Order:** rows of one batch would share a timestamp, so each line gets its
+  own `createdAt`, one millisecond apart, and the logs endpoint sorts by
+  `createdAt` then `id`.
+- **The error is short now:** `Docker build failed (exit code N): ERROR: ...`
+  with Docker's own summary line (at most 300 characters). Everything else is
+  already in the log lines above it.
+- **A failing log write never fails a deployment** (the batch is dropped and an
+  error is printed), and nothing is written once the worker has lost its lease.
+- **Timeout** (10 minutes): the build is stopped with SIGINT first, because
+  that makes Docker cancel the build in its daemon (we saw this earlier), and
+  with SIGKILL 10 seconds later if it is still running.
+- UI: build lines are dimmer than the main steps, and line breaks in log
+  messages are kept (`whitespace-pre-wrap`).
+- Not done: an incremental logs endpoint (return only entries newer than the
+  last one the browser has). The page downloads the full list every 2 s, which
+  stays under about 100 KB with the cap above.
+- Tested locally with a stand-in `docker` program (the real output format of
+  `docker build` on the server is only seen on EC2): collector limits, tail on
+  failure, batching, failing sink, streaming of partial lines, exit codes,
+  timeout, and the short error message.
+
 ---
 
 ## 6. Operations cheat sheet

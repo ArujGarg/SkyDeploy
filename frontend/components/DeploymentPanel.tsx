@@ -284,13 +284,21 @@ export function DeploymentPanel({ deployment, logs }: DeploymentPanelProps) {
               logs.map((log, index) => (
                 <div
                   key={`${log.createdAt}-${log.stage}-${log.message}-${index}`}
-                  className="break-words text-zinc-300"
+                  className={`whitespace-pre-wrap break-words ${
+                    log.stage === "BUILD" ? "text-zinc-500" : "text-zinc-300"
+                  }`}
                 >
                   <span className="mr-2 text-zinc-600">
                     {formatLogTime(log.createdAt)}
                   </span>
 
-                  <span className="mr-2 text-blue-400">[{log.stage}]</span>
+                  <span
+                      className={`mr-2 ${
+                        log.stage === "BUILD" ? "text-zinc-600" : "text-blue-400"
+                      }`}
+                    >
+                      [{log.stage}]
+                    </span>
 
                   <span>{log.message}</span>
                 </div>

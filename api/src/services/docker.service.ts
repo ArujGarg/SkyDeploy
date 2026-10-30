@@ -1,12 +1,9 @@
-import { execFile } from "child_process";
+import { execFile, spawn } from "child_process";
 import { promisify } from "util";
 import path from "path";
 import { workerConfig } from "../config/worker.config.js";
 
 const execFileAsync = promisify(execFile);
-
-// `docker build` prints a lot; the default 1MB buffer would fail big builds.
-const BUILD_MAX_BUFFER = 50 * 1024 * 1024;
 
 export const DEPLOYMENT_LABEL = "skydeploy.deployment";
 
@@ -14,25 +11,131 @@ export function imageTagFor(deploymentId: string) {
   return `skydeploy:${deploymentId}`;
 }
 
-export async function buildImage(deploymentId: string, workspaceName: string) {
+/** The build ran and exited with an error. The message is kept short on purpose. */
+export class BuildFailedError extends Error {
+  constructor(exitCode: number | null, reason: string | null) {
+    super(
+      `Docker build failed (exit code ${exitCode ?? "unknown"})${reason ? `: ${reason}` : ""}`,
+    );
+    this.name = "BuildFailedError";
+  }
+}
+
+/**
+ * Runs a command and hands every line of its output (stdout and stderr) to
+ * `onLine` as soon as it appears, instead of waiting for the command to finish.
+ * If it runs longer than `timeoutMs` it is stopped (politely first, forcefully
+ * 10 seconds later). Resolves with how it ended; rejects only if the command
+ * could not be started at all.
+ */
+export function runStreaming(
+  command: string,
+  args: string[],
+  options: { timeoutMs: number; onLine: (line: string) => void },
+) {
+  return new Promise<{ exitCode: number | null; timedOut: boolean }>(
+    (resolve, reject) => {
+      const child = spawn(command, args, {
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+
+      let timedOut = false;
+      let killTimer: ReturnType<typeof setTimeout> | undefined;
+
+      const timer = setTimeout(() => {
+        timedOut = true;
+        // SIGINT lets `docker build` cancel the build inside Docker; a hard
+        // kill could leave it running there. Force it if it does not stop.
+        child.kill("SIGINT");
+        killTimer = setTimeout(() => child.kill("SIGKILL"), 10_000);
+      }, options.timeoutMs);
+
+      // A chunk can end in the middle of a line, so keep the unfinished part.
+      const lineReader = () => {
+        let carry = "";
+
+        return {
+          write(chunk: Buffer) {
+            const parts = (carry + chunk.toString("utf8")).split(/\r?\n/);
+            carry = parts.pop() ?? "";
+
+            for (const line of parts) {
+              options.onLine(line);
+            }
+          },
+          end() {
+            if (carry) {
+              options.onLine(carry);
+              carry = "";
+            }
+          },
+        };
+      };
+
+      const out = lineReader();
+      const err = lineReader();
+
+      child.stdout.on("data", (chunk: Buffer) => out.write(chunk));
+      child.stderr.on("data", (chunk: Buffer) => err.write(chunk));
+
+      child.on("error", (error) => {
+        clearTimeout(timer);
+        clearTimeout(killTimer);
+        reject(error);
+      });
+
+      child.on("close", (exitCode) => {
+        clearTimeout(timer);
+        clearTimeout(killTimer);
+        out.end();
+        err.end();
+        resolve({ exitCode, timedOut });
+      });
+    },
+  );
+}
+
+/**
+ * Builds the image. Every line of Docker's output goes to `onLine` while the
+ * build runs. On failure the error stays short: the details are in the lines
+ * that were already passed on.
+ */
+export async function buildImage(
+  deploymentId: string,
+  workspaceName: string,
+  onLine: (line: string) => void = () => {},
+) {
   const imageTag = imageTagFor(deploymentId);
 
   const projectPath = path.join(process.cwd(), "workspace", workspaceName);
 
-  try {
-    await execFileAsync("docker", ["build", "-t", imageTag, projectPath], {
-      timeout: workerConfig.buildTimeoutMs,
-      killSignal: "SIGKILL",
-      maxBuffer: BUILD_MAX_BUFFER,
-    });
-  } catch (error) {
-    if (error instanceof Error && "killed" in error && error.killed) {
-      throw new Error(
-        `Docker build timed out after ${workerConfig.buildTimeoutMs / 1000} seconds`,
-      );
-    }
+  // Docker prints its own summary of what went wrong on a line starting with
+  // "ERROR:" (for example `ERROR: process "/bin/sh -c ..." did not complete`).
+  let dockerError: string | null = null;
 
-    throw error;
+  const { exitCode, timedOut } = await runStreaming(
+    "docker",
+    ["build", "--progress=plain", "-t", imageTag, projectPath],
+    {
+      timeoutMs: workerConfig.buildTimeoutMs,
+      onLine(line) {
+        if (/^(#\d+ )?ERROR:/.test(line)) {
+          dockerError = line.replace(/^#\d+ /, "").slice(0, 300);
+        }
+
+        onLine(line);
+      },
+    },
+  );
+
+  if (timedOut) {
+    throw new Error(
+      `Docker build timed out after ${workerConfig.buildTimeoutMs / 1000} seconds`,
+    );
+  }
+
+  if (exitCode !== 0) {
+    throw new BuildFailedError(exitCode, dockerError);
   }
 
   return imageTag;

@@ -243,9 +243,8 @@ app.get("/api/deployments/:id/logs", async (req, res) => {
         message: true,
         createdAt: true,
       },
-      orderBy: {
-        createdAt: "asc",
-      },
+      // Build output is saved in batches; id breaks any tie in createdAt.
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
     });
 
     return res.status(200).json(logs);
