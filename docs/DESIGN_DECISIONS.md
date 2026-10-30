@@ -566,7 +566,13 @@ process.
 - At most 2 builds at once; a third waits.
 - Build memory cannot be capped, so two large builds together could still
   exhaust memory. The 500 MB check only prevents starting a worker when memory
-  is already low.
+  is already low, and raising it does not help: worker 2 starts precisely when
+  another build is already running (549 MB was available then), so a higher
+  threshold would mean it never starts. The measured low point with two
+  parallel builds was 131 MB. The server has no swap, so running out would mean
+  the kernel kills a process (worker, API, Docker or the build) instead of just
+  slowing down. A swap file (about 2 GB, low swappiness) is the cheap safety
+  net; a larger instance is the real fix for heavier projects.
 - The autoscaler reacts in 15 to 35 seconds, not instantly.
 - `pm2 stop` is not awaited, so while worker 2 is draining it still counts as
   running and a scale-up cannot start another instance (it is already there).
@@ -595,8 +601,29 @@ false` in the config, pm2 would not launch it by name. The config was changed
 (see 5.4). This is exactly the kind of bug only a test on the real process
 manager finds; the decision logic and metrics were already covered by the local
 tests.
-*Results of the re-run (parallel builds, scale up and down) are recorded below
-once run.*
+
+**Second EC2 run, after the fix (2026-10-30):** three deployments submitted at
+once from the new UI (each repo row deploys independently).
+- 13:21:39 the autoscaler started worker 2 ("2 waiting (oldest 27s) and all 1
+  worker(s) busy"); `pm2 start` on a worker it had earlier stopped worked.
+- Two builds ran at the same time (seen twice, maximum 2). Worker 2 finished
+  its first deployment and then took the third as soon as it was free.
+- Docker-assigned ports were distinct (32772, 32773) and bound to `127.0.0.1`
+  only (`ss -ltn` showed nothing on a public interface).
+- The third deployment failed in `bundle install` because of that project's own
+  `Gemfile.lock` (a Mac-only platform list, `sass-embedded` for `arm64-darwin`
+  and `x86_64-linux`, exit code 7). It was handled as a normal job failure: no
+  retry, error in the logs, no leftover container, image or folder.
+- 13:26:03 worker 2 was stopped after "nothing waiting and a worker idle for
+  122s": SIGINT, "finishing the current job", clean exit.
+- Scale-down earlier the same day (no load): same stop path, exit code 0, about
+  6 seconds from the decision to `stopped`.
+- **Memory was tight.** Sampling every 5 s during the two parallel builds, the
+  lowest available memory was **131 MB** (of 1.9 GB). Nothing was killed
+  (pm2 restart counters unchanged) but this is close to the limit where Linux
+  starts killing processes. An earlier note in the chat quoted 420 MB; that
+  figure came from sampling only when the build count changed and missed the
+  real low point.
 
 ### 5.11 Likely interview questions
 - **"How do you scale the workers?"** A control loop reads queue depth and
@@ -605,7 +632,13 @@ once run.*
 - **"Why not CPU?"** Builds are I/O bound; wait time is what users feel.
 - **"What stops it flapping?"** Different thresholds up (20 s) and down
   (120 s idle), plus a 60 s cooldown.
-- **"Why only two?"** 2 vCPUs and 1.9 GB; more would risk out-of-memory kills.
+- **"Why only two?"** 2 vCPUs and 1.9 GB; two parallel builds already took
+  available memory down to 131 MB in testing, so more would risk out-of-memory
+  kills.
+- **"What did testing on the real server find that local tests did not?"**
+  pm2 will not launch an `autostart: false` app even when started by name, so
+  the autoscaler's start silently did nothing; and the true memory low point
+  during parallel builds, which only real builds on the real box show.
 - **"What would you change to scale further?"** More servers, a registry of
   which server hosts which app, nginx routing by server, and an Auto Scaling
   Group.
