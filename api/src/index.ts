@@ -3,7 +3,10 @@ import "./config/env.js";
 import express from "express";
 import { prisma } from "./db/prisma.js";
 import { connectRedis, isRedisReady } from "./lib/redis.js";
-import { isAllowedGithubRepoUrl } from "./services/git.service.js";
+import {
+  isAllowedGithubRepoUrl,
+  isValidBranchName,
+} from "./services/git.service.js";
 import { addDeploymentLog } from "./services/log.service.js";
 import { enqueueDeployment } from "./services/queue.service.js";
 import cors from "cors";
@@ -125,8 +128,15 @@ app.post("/api/deployments", async (req, res) => {
       });
     }
 
-    const deploymentBranch =
-      typeof branch === "string" && branch ? branch : "main";
+    // The branch is required: assuming "main" would break repositories whose
+    // default branch has another name, because that exact branch is cloned.
+    if (typeof branch !== "string" || !isValidBranchName(branch)) {
+      return res.status(400).json({
+        message: "A valid branch name is required",
+      });
+    }
+
+    const deploymentBranch = branch;
 
     const repoName = githubRepoUrl
       .replace(/\.git$/, "")

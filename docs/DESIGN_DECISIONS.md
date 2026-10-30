@@ -647,6 +647,34 @@ once from the new UI (each repo row deploys independently).
 
 ---
 
+## 5b. Smaller fixes
+
+### The recorded branch is now the branch that is deployed
+Before, the frontend sent the repo's default branch, the API stored it on the
+Project and Deployment, but `git clone` never used it, so the code that was
+built was always whatever the repository's default branch happened to be. The
+two agreed only because both were "the default branch". They disagree if the
+default is renamed on GitHub, or if anything sends another branch: the UI then
+shows a branch that was not deployed.
+- `cloneRepository` now uses `--branch=<recorded branch>` (one argument, so a
+  name can never be read as an option). Names are validated twice (API and
+  clone): letters, digits, `.` `_` `/` `-`, must start with a letter or digit,
+  no `..`, `//`, trailing `/`, `.` or `.lock`.
+- The API now requires a branch. The old fallback to `"main"` would have
+  broken repositories whose default branch has another name, because that
+  exact branch is cloned.
+- If the recorded branch no longer exists (for example after a rename), the
+  deployment fails with `fatal: Remote branch <x> not found in upstream
+  origin` instead of silently deploying something else. Deploying again from
+  the home page sends the current default and updates the recorded branch.
+- Clone failure messages now show git's `fatal:` line. Before, the first line
+  of git's output ("Cloning into '<server path>'...") was shown, which was
+  useless and exposed a server path. The access token is still masked.
+- Deliberately not built: a branch picker in the UI. It would be a feature,
+  not part of the end-to-end flow.
+
+---
+
 ## 6. Operations cheat sheet
 
 **Env vars** (all optional; autoscaler ones are listed in section 5.4): `LEASE_SECONDS`, `HEARTBEAT_SECONDS`,

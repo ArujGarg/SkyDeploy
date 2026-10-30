@@ -133,6 +133,7 @@ async function processDeployment(deploymentId: string, attempt: number) {
       workspaceName,
       {
         accessToken,
+        branch: deployment.branch,
       },
     );
 
