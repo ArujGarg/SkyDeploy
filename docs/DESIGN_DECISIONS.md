@@ -12,7 +12,7 @@ Last updated: 2026-10-30.
 2. [Graceful worker shutdown](#2-graceful-worker-shutdown)
 3. [Part 1: surviving a worker that dies mid-deployment](#3-part-1-surviving-a-worker-that-dies-mid-deployment)
 4. [Part 2: Redis failure](#4-part-2-redis-failure)
-5. [Part 3: autoscaling workers](#5-part-3-autoscaling-workers) (not built yet)
+5. [Part 3: running deployments in parallel (autoscaling workers)](#5-part-3-running-deployments-in-parallel-autoscaling-workers)
 6. [Operations cheat sheet](#6-operations-cheat-sheet)
 
 ---
@@ -459,18 +459,151 @@ Not tested on EC2: Redis losing its data while deployments are waiting
 
 ---
 
-## 5. Part 3: autoscaling workers
-*Not built yet.* Planned: fix port-allocation races (let Docker pick the
-port, bind to localhost), per-container resource limits, then a small
-controller that scales worker processes on queue depth and oldest-job age,
-with cooldowns, a memory veto, and scale-down via the graceful shutdown.
-Hard ceiling on this box: about 2 concurrent builds (2 vCPU, ~1.9 GB RAM).
+## 5. Part 3: running deployments in parallel (autoscaling workers)
+
+### 5.1 The problem
+One worker process handles one deployment at a time, and a deployment takes
+one to three minutes. With three users deploying together, the third waits for
+the first two to finish. The goal: run more than one deployment at once when
+people are waiting, and go back to one worker when it is quiet.
+
+### 5.2 The hardware limit (decided: maximum 2 workers)
+The EC2 server has 2 vCPUs and 1.9 GB of memory, with roughly 900 MB
+available. The API, a worker and Redis use 130 to 160 MB each; a deployed app
+about 15 to 40 MB; a `docker build` can need several hundred MB more, and
+nothing reliably caps a build's memory. Running out of memory makes Linux kill
+processes at random (possibly the worker, API or Docker). So the maximum is 2
+workers, and the autoscaler also refuses to start one when free memory is
+low. Going further means more servers (5.7). On this box, "autoscaling" means
+scaling between 1 and 2 workers, but the design is the same one used with many.
+
+### 5.3 What had to be fixed before two workers could run together
+Part 1 already made it safe for several workers to take jobs (the atomic
+claim). The deployment steps themselves had two problems:
+- **Two workers could choose the same port.** `getAvailablePort` scanned
+  upward from 10000 and returned the first free port, but the container was
+  started later, so two workers could both be told 10004 was free; the second
+  `docker run` then failed with "port is already allocated" and a valid
+  deployment was marked `FAILED`. Fix: Docker now picks the port itself in the
+  same step that starts the container (`docker run -p 127.0.0.1::<port>`), and
+  the worker reads it back with `docker port` (`getPublishedPort`) and stores
+  it in `hostPort`. `port.util.ts` was deleted. New deployments therefore use
+  high ports (32768 and up). Existing containers keep their old ports until
+  redeployed.
+- **Apps were published on all network interfaces** (`0.0.0.0:10000` ...).
+  They are now bound to `127.0.0.1`, so only nginx on the same machine can
+  reach them. The security group (only 22, 80, 443 open) already blocked
+  direct access, so this is defence in depth.
+Other effects with two workers running: nginx config files are per deployment
+(no clash) and concurrent `nginx -s reload` is safe; the reaper and claim were
+already safe with several workers; old images are still never removed, which
+matters more with more throughput (see the remaining cleanup work).
+
+### 5.4 How it works
+- **Two worker slots** in `ecosystem.config.cjs`: `skydeploy-worker` (always
+  on) and `skydeploy-worker-2` with `autostart: false`. Each is its own
+  process with its own id, heartbeat and reaper; if one crashes the other
+  continues.
+- **The autoscaler** (`api/src/autoscaler.ts`, pm2 app `skydeploy-autoscaler`)
+  checks every 15 s. It reads, from **Postgres only** (so it works while Redis
+  is down): how many deployments are `QUEUED` (ignoring rows past the max
+  queue age), how long the longest-waiting one has waited, and how many
+  distinct workers hold a live lease. It reads running workers from `pm2
+  jlist` and available memory from `/proc/meminfo` (`MemAvailable`).
+- **The decision** (`decideScaling`, a pure function in
+  `services/autoscaler.service.ts`):
+  - *Start* the extra worker when a deployment has waited 20 s or more, every
+    running worker is busy, we are below the maximum, and at least 500 MB is
+    available.
+  - *Stop* it when nothing has been waiting and a worker has been idle for 120
+    s, and we are above the minimum.
+  - After any change, nothing changes for 60 s (cooldown). Scale up fast, down
+    slowly, so it does not start and stop workers repeatedly.
+- **Scaling down is graceful.** `pm2 stop skydeploy-worker-2` sends SIGINT; the
+  worker finishes its current deployment, then exits (pm2 waits up to
+  `kill_timeout`, 10 minutes). The autoscaler never stops the primary worker
+  and does not wait for the stop command to return.
+- All numbers are environment variables (`MAX_WORKERS`,
+  `SCALE_UP_AFTER_SECONDS`, `SCALE_DOWN_AFTER_IDLE_SECONDS`,
+  `MIN_FREE_MEMORY_MB`, `SCALER_COOLDOWN_SECONDS`, `SCALER_INTERVAL_SECONDS`).
+
+### 5.5 Why these signals
+- **Age of the oldest waiting deployment** is the best signal: it measures
+  what a user feels. "Three queued" can be 30 seconds or 30 minutes of waiting.
+- **Number waiting** is a cheap second condition. **CPU use** is a poor signal
+  because builds spend much of their time waiting for network or disk.
+- **Free memory** is a safety veto, not a trigger.
+- A free worker with a waiting job does not trigger scale-up (that worker
+  will pick the job up within seconds).
+
+### 5.6 What happens when...
+| Situation | Result |
+|---|---|
+| 3 deployments at once | First is built; after ~20 s of waiting the autoscaler starts worker 2 and the second builds in parallel; the third waits for whichever finishes first |
+| Quiet for 2 minutes | Worker 2 is stopped gracefully |
+| Autoscaler crashes | pm2 restarts it; workers keep running at the current count |
+| Postgres unreachable | Autoscaler cannot read metrics and changes nothing |
+| Redis down | No effect on the autoscaler |
+| Memory low while jobs wait | It does not start worker 2 and logs why |
+| Worker 2 stopped while it has a job | Job finishes first, then the worker exits |
+| A deploy runs `pm2 startOrReload` | It may start worker 2 (pm2 treats it as a reload); the autoscaler stops it again after the idle period |
+
+### 5.7 Beyond one server (not built, interview talking point)
+Real scale-out needs several servers, and breaks assumptions that hold today:
+nginx proxies to `127.0.0.1:<port>` (it would need the address of the server
+running each app, so something must record which server hosts what); Docker
+images live only on the building server; the reaper's cleanup (containers,
+folders, nginx routes) runs on the dead worker's own machine; and the
+autoscaler would ask AWS to add or remove whole servers (an Auto Scaling
+Group driven by queue depth or oldest wait) instead of starting a pm2
+process.
+
+### 5.8 Known limitations
+- At most 2 builds at once; a third waits.
+- Build memory cannot be capped, so two large builds together could still
+  exhaust memory. The 500 MB check only prevents starting a worker when memory
+  is already low.
+- The autoscaler reacts in 15 to 35 seconds, not instantly.
+- `pm2 stop` is not awaited, so while worker 2 is draining it still counts as
+  running and a scale-up cannot start another instance (it is already there).
+- No metrics or alerting; decisions are only visible in the autoscaler's log.
+
+### 5.9 Files
+`api/src/autoscaler.ts` (loop and pm2/OS access),
+`services/autoscaler.service.ts` (decision and Postgres metrics),
+`config/autoscaler.config.ts`, `services/docker.service.ts`
+(`runContainer`, `getPublishedPort`), `worker.ts`, `ecosystem.config.cjs`.
+Deleted: `utils/port.util.ts`.
+
+### 5.10 How it was tested
+Locally against a throwaway Postgres, in UTC and Asia/Kolkata: 17 decision
+cases (thresholds at and just below their limits, a free worker, maximum
+reached, low memory, cooldown, minimum reached, something waiting blocks
+scale-down) and the Postgres metrics (only recent queued rows counted, oldest
+wait, distinct busy workers with a live lease, dead and finished ones not
+counted). The port parsing was checked on realistic `docker port` outputs.
+*EC2 tests (ports, parallel builds, scale up and down) are recorded below once
+run.*
+
+### 5.11 Likely interview questions
+- **"How do you scale the workers?"** A control loop reads queue depth and
+  oldest wait from Postgres and starts or stops a second worker within
+  min/max bounds, with a cooldown and a memory check.
+- **"Why not CPU?"** Builds are I/O bound; wait time is what users feel.
+- **"What stops it flapping?"** Different thresholds up (20 s) and down
+  (120 s idle), plus a 60 s cooldown.
+- **"Why only two?"** 2 vCPUs and 1.9 GB; more would risk out-of-memory kills.
+- **"What would you change to scale further?"** More servers, a registry of
+  which server hosts which app, nginx routing by server, and an Auto Scaling
+  Group.
+- **"What race did parallel workers expose?"** Port selection; fixed by
+  letting Docker allocate atomically.
 
 ---
 
 ## 6. Operations cheat sheet
 
-**Env vars** (all optional): `LEASE_SECONDS`, `HEARTBEAT_SECONDS`,
+**Env vars** (all optional; autoscaler ones are listed in section 5.4): `LEASE_SECONDS`, `HEARTBEAT_SECONDS`,
 `MAX_ATTEMPTS`, `REAPER_INTERVAL_SECONDS`, `STALE_QUEUED_SECONDS`,
 `MAX_QUEUE_AGE_SECONDS`, `CLONE_TIMEOUT_MS`, `BUILD_TIMEOUT_MS`,
 `ATTEMPT_TIMEOUT_MS`, `QUEUE_POLL_TIMEOUT_SECONDS`.

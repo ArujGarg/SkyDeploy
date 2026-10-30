@@ -42,11 +42,15 @@ export async function runContainer(
   deploymentId: string,
   attempt: number,
   imageTag: string,
-  hostPort: number,
   containerPort: number,
 ) {
   // The labels let a later attempt (or the reaper) find containers that a
   // dead attempt started, even though their ids were never saved.
+  //
+  // `127.0.0.1::<port>` lets Docker pick a free host port itself, in the same
+  // step that starts the container. Picking one ourselves and starting the
+  // container later let two workers choose the same port. Binding to
+  // 127.0.0.1 keeps the app reachable only through nginx on this machine.
   const { stdout } = await execFileAsync("docker", [
     "run",
     "-d",
@@ -55,11 +59,34 @@ export async function runContainer(
     "--label",
     `skydeploy.attempt=${attempt}`,
     "-p",
-    `${hostPort}:${containerPort}`,
+    `127.0.0.1::${containerPort}`,
     imageTag,
   ]);
 
   return stdout.trim();
+}
+
+/** The host port Docker assigned to the container's port. */
+export async function getPublishedPort(
+  containerId: string,
+  containerPort: number,
+) {
+  const { stdout } = await execFileAsync("docker", [
+    "port",
+    containerId,
+    `${containerPort}/tcp`,
+  ]);
+
+  // Output looks like "127.0.0.1:32768", one line per bound address.
+  const match = stdout.match(/:(\d+)\s*$/m);
+
+  if (!match?.[1]) {
+    throw new Error(
+      `Could not find the published port of container ${containerId}`,
+    );
+  }
+
+  return Number(match[1]);
 }
 
 export async function isContainerRunning(containerId: string) {

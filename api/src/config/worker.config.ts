@@ -1,7 +1,7 @@
 import "./env.js";
 import type { DeploymentStatus } from "../generated/prisma/client.js";
 
-function numberFromEnv(name: string, fallback: number) {
+export function numberFromEnv(name: string, fallback: number) {
   const value = Number(process.env[name]);
 
   return Number.isFinite(value) && value > 0 ? value : fallback;

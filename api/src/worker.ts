@@ -17,6 +17,7 @@ import { hasDockerfile } from "./services/deployment.service.js";
 import {
   buildImage,
   getExposedPort,
+  getPublishedPort,
   isContainerRunning,
   runContainer,
   stopAndRemoveContainer,
@@ -38,7 +39,6 @@ import {
 import { waitForNextJob } from "./services/job-source.service.js";
 import { DEPLOYMENT_QUEUE } from "./services/queue.service.js";
 import { startReaper } from "./services/reaper.service.js";
-import { getAvailablePort } from "./utils/port.util.js";
 
 // Graceful shutdown: a stop signal only sets this flag. The loop checks it
 // between jobs, so the job in progress always runs to completion.
@@ -167,13 +167,8 @@ async function processDeployment(deploymentId: string, attempt: number) {
     await updateOwned(deploymentId, attempt, { status: "DEPLOYING", imageTag });
 
     const containerPort = await getExposedPort(imageTag);
-    const hostPort = await getAvailablePort();
 
-    await addDeploymentLog(
-      deploymentId,
-      "DEPLOYING",
-      `Starting container on host port ${hostPort}`,
-    );
+    await addDeploymentLog(deploymentId, "DEPLOYING", "Starting container");
 
     // Last chance to notice we lost the job before creating something that
     // outlives this attempt.
@@ -183,7 +178,6 @@ async function processDeployment(deploymentId: string, attempt: number) {
       deploymentId,
       attempt,
       imageTag,
-      hostPort,
       containerPort,
     );
 
@@ -198,10 +192,12 @@ async function processDeployment(deploymentId: string, attempt: number) {
       throw new Error("Container exited immediately after startup");
     }
 
+    const hostPort = await getPublishedPort(containerId, containerPort);
+
     await addDeploymentLog(
       deploymentId,
       "DEPLOYING",
-      `Container started (${containerId})`,
+      `Container started on host port ${hostPort} (${containerId})`,
     );
 
     console.log("container is running");
