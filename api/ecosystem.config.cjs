@@ -33,11 +33,14 @@ module.exports = {
       name: "skydeploy-worker",
     },
     {
-      // The extra worker. The autoscaler starts and stops it with
-      // `pm2 start/stop skydeploy-worker-2`, so pm2 must not start it itself.
+      // The extra worker. The autoscaler stops it when it is not needed and
+      // starts it again with `pm2 start skydeploy-worker-2`. Do not set
+      // `autostart: false` here: pm2 then refuses to launch it by name too, so
+      // the autoscaler's `pm2 start` silently does nothing. Instead it starts
+      // with everything else and the autoscaler stops it after it has been
+      // idle for a while.
       ...worker,
       name: "skydeploy-worker-2",
-      autostart: false,
     },
     {
       ...base,

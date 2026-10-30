@@ -500,8 +500,12 @@ already safe with several workers; old images are still never removed, which
 matters more with more throughput (see the remaining cleanup work).
 
 ### 5.4 How it works
-- **Two worker slots** in `ecosystem.config.cjs`: `skydeploy-worker` (always
-  on) and `skydeploy-worker-2` with `autostart: false`. Each is its own
+- **Two worker slots** in `ecosystem.config.cjs`: `skydeploy-worker` (never
+  stopped) and `skydeploy-worker-2` (started and stopped by the autoscaler).
+  `autostart: false` must NOT be used for the second one: pm2 then refuses to
+  launch it even with `pm2 start skydeploy-worker-2`, so the autoscaler's start
+  silently does nothing (found in the first EC2 test, see 5.10). It starts with
+  the other processes and is stopped after the idle period. Each is its own
   process with its own id, heartbeat and reaper; if one crashes the other
   continues.
 - **The autoscaler** (`api/src/autoscaler.ts`, pm2 app `skydeploy-autoscaler`)
@@ -546,7 +550,7 @@ matters more with more throughput (see the remaining cleanup work).
 | Redis down | No effect on the autoscaler |
 | Memory low while jobs wait | It does not start worker 2 and logs why |
 | Worker 2 stopped while it has a job | Job finishes first, then the worker exits |
-| A deploy runs `pm2 startOrReload` | It may start worker 2 (pm2 treats it as a reload); the autoscaler stops it again after the idle period |
+| A deploy runs `pm2 startOrReload` | Worker 2 is (re)started with everything else; the autoscaler stops it again after the idle period |
 
 ### 5.7 Beyond one server (not built, interview talking point)
 Real scale-out needs several servers, and breaks assumptions that hold today:
@@ -582,8 +586,17 @@ reached, low memory, cooldown, minimum reached, something waiting blocks
 scale-down) and the Postgres metrics (only recent queued rows counted, oldest
 wait, distinct busy workers with a live lease, dead and finished ones not
 counted). The port parsing was checked on realistic `docker port` outputs.
-*EC2 tests (ports, parallel builds, scale up and down) are recorded below once
-run.*
+
+**First EC2 run (2026-10-30):** Docker-assigned ports worked (the first new
+deployment ran on `127.0.0.1:32768`). With three deployments submitted at once
+the autoscaler correctly decided "start skydeploy-worker-2 (2 waiting (oldest
+29s) and all 1 worker(s) busy)", but worker 2 never ran: with `autostart:
+false` in the config, pm2 would not launch it by name. The config was changed
+(see 5.4). This is exactly the kind of bug only a test on the real process
+manager finds; the decision logic and metrics were already covered by the local
+tests.
+*Results of the re-run (parallel builds, scale up and down) are recorded below
+once run.*
 
 ### 5.11 Likely interview questions
 - **"How do you scale the workers?"** A control loop reads queue depth and
