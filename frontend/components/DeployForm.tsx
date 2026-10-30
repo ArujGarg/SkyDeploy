@@ -1,12 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { signIn } from "next-auth/react";
 import { Rocket } from "lucide-react";
 import type { Session } from "next-auth";
 import { GithubIcon } from "./icons/Github";
 import { RepositoryList } from "./RepositoryList";
-import type { Deployment, DeploymentLog } from "./DeploymentPanel";
 import type { GithubRepo } from "@/lib/github";
 
 export default function DeployForm({
@@ -18,27 +17,12 @@ export default function DeployForm({
   initialRepos: GithubRepo[];
   initialReposError: string | null;
 }) {
-  const [deploymentId, setDeploymentId] = useState<string | null>(null);
-  const [deployment, setDeployment] = useState<Deployment | null>(null);
-  const [logs, setLogs] = useState<DeploymentLog[]>([]);
-
-  const [loading, setLoading] = useState(false);
-
-  // Only used while the POST request is being created.
-  const [activeRepoUrl, setActiveRepoUrl] = useState<string | null>(null);
-
-  // Remembers which repo owns the current deployment.
-  const [deploymentRepoUrl, setDeploymentRepoUrl] = useState<string | null>(
-    null,
-  );
-
   const [repos, setRepos] = useState<GithubRepo[]>(initialRepos);
   const [reposLoading, setReposLoading] = useState(false);
   const [reposError, setReposError] = useState<string | null>(
     initialReposError,
   );
 
-  const [deployError, setDeployError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
 
   async function loadRepositories() {
@@ -65,117 +49,6 @@ export default function DeployForm({
       setReposLoading(false);
     }
   }
-
-  async function createDeployment(githubRepoUrl: string, branch?: string) {
-    if (!githubRepoUrl.trim()) return;
-
-    try {
-      setLoading(true);
-      setDeployError(null);
-
-      // Clear the previous deployment UI.
-      setDeployment(null);
-      setLogs([]);
-      setDeploymentId(null);
-
-      // Remember which repository owns this deployment.
-      setActiveRepoUrl(githubRepoUrl);
-      setDeploymentRepoUrl(githubRepoUrl);
-
-      const response = await fetch("/api/deployments", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          githubRepoUrl,
-          branch,
-        }),
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.message || "Failed to create deployment");
-      }
-
-      setDeploymentId(data.id);
-    } catch (error) {
-      console.error(error);
-
-      // Don't show a deployment panel when deployment creation itself failed.
-      setDeploymentRepoUrl(null);
-
-      setDeployError(
-        error instanceof Error ? error.message : "Failed to create deployment",
-      );
-    } finally {
-      setLoading(false);
-      setActiveRepoUrl(null);
-    }
-  }
-
-  async function deployRepo(repo: GithubRepo) {
-    await createDeployment(repo.cloneUrl, repo.defaultBranch);
-  }
-
-  useEffect(() => {
-    if (!deploymentId) return;
-
-    let stopped = false;
-
-    const fetchDeploymentData = async () => {
-      try {
-        const [deploymentRes, logsRes] = await Promise.all([
-          fetch(`/api/deployments/${deploymentId}`),
-          fetch(`/api/deployments/${deploymentId}/logs`),
-        ]);
-
-        const deploymentData = await deploymentRes.json();
-        const logsData = await logsRes.json();
-
-        if (stopped) return;
-
-        setDeployment(deploymentData);
-        setLogs(logsData);
-
-        if (
-          deploymentData.status === "SUCCESS" ||
-          deploymentData.status === "FAILED"
-        ) {
-          return true;
-        }
-
-        return false;
-      } catch (error) {
-        console.error(error);
-        return false;
-      }
-    };
-
-    const poll = async () => {
-      const isFinished = await fetchDeploymentData();
-
-      if (isFinished || stopped) return;
-
-      timeoutId = setTimeout(poll, 2000);
-    };
-
-    let timeoutId: ReturnType<typeof setTimeout>;
-
-    // Fetch immediately.
-    void poll();
-
-    return () => {
-      stopped = true;
-      clearTimeout(timeoutId);
-    };
-  }, [deploymentId]);
-
-  const isDeploymentActive =
-    deployment !== null &&
-    deployment.status !== "SUCCESS" &&
-    deployment.status !== "FAILED";
 
   return (
     <div className="mx-auto max-w-5xl">
@@ -230,23 +103,7 @@ export default function DeployForm({
             search={search}
             onSearchChange={setSearch}
             onRetry={() => void loadRepositories()}
-            onDeploy={(repo) => void deployRepo(repo)}
-            deploying={loading || !!isDeploymentActive}
-            activeRepoUrl={activeRepoUrl}
-            deployment={deployment}
-            logs={logs}
-            deploymentRepoUrl={deploymentRepoUrl}
           />
-
-          {deployError && (
-            <div className="mt-4 rounded-2xl border border-red-200 bg-red-50 p-5">
-              <p className="font-medium text-red-700">
-                Could not start deployment
-              </p>
-
-              <p className="mt-2 text-sm text-red-600">{deployError}</p>
-            </div>
-          )}
         </>
       )}
     </div>
